@@ -1,0 +1,8 @@
+# build environment
+
+FROM python:3.9
+
+RUN apt-get update -y && apt-get install -y nano
+RUN python3 -m pip install --upgrade build
+RUN python3 -m pip install --upgrade twine
+WORKDIR /src

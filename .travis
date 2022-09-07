@@ -1,0 +1,18 @@
+language: minimal
+
+services:
+  - docker
+
+before_install:
+  - docker image pull argovis/testdb:0.1
+  - docker image pull redis:7.0.2
+  - docker image pull argovis/api:2.0.0-rc34
+
+script:
+  - docker network create travis
+  - docker container run -d --network travis --name database argovis/testdb:0.21
+  - docker container run -d --network travis --name redis redis:7.0.2
+  - docker container run -d --network travis --name api argovis/api:2.0.0-rc34
+  - docker image build -t helpers:test .
+  - docker container run --network travis helpers:test
+
