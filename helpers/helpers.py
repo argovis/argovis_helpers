@@ -4,6 +4,10 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
     # GET <apiroot>/<route>?<options> with <apikey> in the header.
     # raises on anything other than success or a 404.
 
+    for option in ['polygon', 'multipolygon']:
+        if option in options:
+            options[option] = str(options[option])
+
     dl = requests.get(apiroot + route, params = options, headers={'x-argokey': apikey}).json()
 
     if 'code' in dl and dl['code'] != 404:

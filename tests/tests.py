@@ -19,6 +19,14 @@ class TestClass():
         assert len(profile) == 1, 'should have returned exactly one profile'
         assert profile[0]['geolocation'] == { "type" : "Point", "coordinates" : [ -35.430227, 1.315393 ] }, 'fetched wrong profile'
 
+    def test_polygon(self):
+        '''
+        make sure polygons are getting handled properly
+        '''
+
+        profile = helpers.argofetch('/argo', options={'polygon': [[-34,2],[-35,2],[-35,3],[-34,3],[-34,2]]}, apikey='', apiroot=self.apiroot)
+        assert len(profile) == 1, 'polygon encompases exactly one profile'
+
     def test_data_inflate(self):
         '''
         check basic behavior of data_inflate
