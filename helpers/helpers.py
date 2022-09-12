@@ -61,10 +61,10 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
     r = route.replace('/', '') # use this for lookups internally, allow user to put the leading / on the end of the api root or the start of the route, either or.
     data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'grids/ohc_kg', 'grids/temperature_rg', 'grids/salinity_rg']
     scoped_parameters = {
-        'argo': ['platform'],
-        'cchdo': ['woceline', 'cchdo_cruise'],
-        'drifters': ['wmo', 'platform'],
-        'tc': ['name']
+        'argo': ['id','platform'],
+        'cchdo': ['id', 'woceline', 'cchdo_cruise'],
+        'drifters': ['id', 'wmo', 'platform'],
+        'tc': ['id', 'name']
     }
     earliest_records = {
         'argo': parsetime("1997-07-27T20:26:20.002Z"),
