@@ -3,8 +3,8 @@ requires      = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "argoHelpers"
-version = "0.0.1b0"
+name = "argovisHelpers"
+version = "0.0.1b5"
 description = "Helper functions to consume and parse information from University of Colorado's Argovis API."
 readme = "README.md"
 authors = [{name = "Bill Mills" }]
