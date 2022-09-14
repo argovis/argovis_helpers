@@ -1,0 +1,53 @@
+Metadata-Version: 2.1
+Name: argovisHelpers
+Version: 0.0.1b5
+Summary: Helper functions to consume and parse information from University of Colorado's Argovis API.
+Author: Bill Mills
+License: Copyright (c) 2022 Argovis
+        
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files (the "Software"), to deal
+        in the Software without restriction, including without limitation the rights
+        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        copies of the Software, and to permit persons to whom the Software is
+        furnished to do so, subject to the following conditions:
+        
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software.
+        
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        SOFTWARE.
+        
+Project-URL: Homepage, https://argovis.colorado.edu
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+License-File: LICENSE
+
+## Build and release
+
+ - Review metadata in `pyproject.toml`
+ - Build a release:
+   ```
+   docker container run -v $(pwd):/src argovis/argovis_helpers:build-220912 python -m build
+   ```
+ - Push to testPypi: 
+   ```
+   docker container run -v $(pwd):/src -it argovis/argovis_helpers:build-220912 twine upload -r testpypi dist/*
+   ```
+ - Test install and try: `python -m pip install -i https://test.pypi.org/simple argovis_helpers`
+ - Push to pypi: 
+   ```
+   docker container run -v $(pwd):/src -it argovis/argovis_helpers:build-220912 twine upload dist/*
+   ```
+ - `git add` your new build artifacts under `/dist`
+ - Push to github and mint a release matching the version number in `pyproject.toml`.
+
+  
