@@ -4,6 +4,7 @@ import datetime
 class TestClass():
     def setUp(self):   
         self.apiroot = 'http://api:8080'
+        self.apikey  = 'developer'
 
         return
 
@@ -15,7 +16,7 @@ class TestClass():
         check basic behavior of argofetch
         '''
 
-        profile = helpers.argofetch('/argo', options={'id': '4901283_021'}, apikey='', apiroot=self.apiroot)
+        profile = helpers.argofetch('/argo', options={'id': '4901283_021'}, apikey=self.apikey, apiroot=self.apiroot)
         assert len(profile) == 1, 'should have returned exactly one profile'
         assert profile[0]['geolocation'] == { "type" : "Point", "coordinates" : [ -35.430227, 1.315393 ] }, 'fetched wrong profile'
 
@@ -24,7 +25,7 @@ class TestClass():
         make sure polygons are getting handled properly
         '''
 
-        profile = helpers.argofetch('/argo', options={'polygon': [[-34,2],[-35,2],[-35,3],[-34,3],[-34,2]]}, apikey='', apiroot=self.apiroot)
+        profile = helpers.argofetch('/argo', options={'polygon': [[-34,2],[-35,2],[-35,3],[-34,3],[-34,2]]}, apikey=self.apikey, apiroot=self.apiroot)
         assert len(profile) == 1, 'polygon encompases exactly one profile'
 
     def test_data_inflate(self):
@@ -68,9 +69,17 @@ class TestClass():
         check basic behavior of query
         '''
 
-        response = helpers.query('/tc', options={'startDate': '1851-05-26T00:00:00Z', 'endDate': '1852-01-01T00:00:00Z'}, apiroot=self.apiroot)
+        response = helpers.query('/tc', options={'startDate': '1851-05-26T00:00:00Z', 'endDate': '1852-01-01T00:00:00Z'}, apikey=self.apikey, apiroot=self.apiroot)
         assert len(response) == 9, f'should be able to query entire globe for 6 months, with time divisions landing exactly on one timestamp, and get back 9 tcs, instead got {response}'
-        
+
+    def test_query_vocab(self):
+        '''
+        check basic behavior of vocab query
+        '''
+
+        response = helpers.query('/cchdo/vocabulary', options={'parameter': 'woceline',}, apikey=self.apikey, apiroot=self.apiroot)
+        assert response == ["A12", "AR08", "SR04"], f'should be able to query woceline vocab, instead got {response}'
+
     def test_units_inflate(self):
         '''
         check basic behavior of units_inflate
