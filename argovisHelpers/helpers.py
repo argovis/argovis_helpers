@@ -14,7 +14,7 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
     dl = dl.json()
 
     if 'code' in dl and dl['code'] != 404:
-        raise Exception(dl['code'] + ': ' + dl['message'])
+        raise Exception(str(dl['code']) + ': ' + dl['message'])
 
     if ('code' in dl and dl['code']==404) or (type(dl[0]) is dict and 'code' in dl[0] and dl[0]['code']==404):
         return []
