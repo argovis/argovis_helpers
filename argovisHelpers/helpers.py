@@ -1,25 +1,32 @@
 import requests, datetime, copy, time
 
-def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/'):
+def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', suggestedLatency=0):
     # GET <apiroot>/<route>?<options> with <apikey> in the header.
     # raises on anything other than success or a 404.
 
+    o = copy.deepcopy(options)
     for option in ['polygon', 'multipolygon']:
         if option in options:
             options[option] = str(options[option])
 
     dl = requests.get(apiroot + route, params = options, headers={'x-argokey': apikey})
-    url = dl.url
-    #print(url)
+    #url = dl.url
     dl = dl.json()
+
+    if 'code' in dl and dl['code'] == 429:
+        # user exceeded API limit, extract suggested wait and delay times, and try again
+        wait = dl['delay'][0]
+        latency = dl['delay'][1]
+        time.sleep(wait*1.1)
+        return argofetch(route, options=o, apikey=apikey, apiroot=apiroot, suggestedLatency=latency)
 
     if 'code' in dl and dl['code'] != 404:
         raise Exception(str(dl['code']) + ': ' + dl['message'])
 
     if ('code' in dl and dl['code']==404) or (type(dl[0]) is dict and 'code' in dl[0] and dl[0]['code']==404):
-        return []
+        return [], suggestedLatency
 
-    return dl
+    return dl, suggestedLatency
 
 def data_inflate(data_doc, metadata_doc=None):
     # given a single JSON <data_doc> downloaded from one of the standard data routes with compression=array,
@@ -60,8 +67,9 @@ def parsetime(time):
 
 def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/'):
     # middleware function between the user and a call to argofetch to make sure individual requests are reasonably scoped and timed.
-
-    r = route.replace('/', '') # use this for lookups internally, allow user to put the leading / on the end of the api root or the start of the route, either or.
+    
+    r = re.sub('^/', '', route)
+    r = re.sub('/$', '', r)
     data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'grids/ohc_kg', 'grids/temperature_rg', 'grids/salinity_rg']
     scoped_parameters = {
         'argo': ['id','platform'],
@@ -81,10 +89,10 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
 
     if r in data_routes:
         # these are potentially large requests that might need to be sliced up
-        
+
         ## if a data query carries a scoped parameter, no need to slice up:
         if r in scoped_parameters and not set(scoped_parameters[r]).isdisjoint(options.keys()):
-            return argofetch(route, options=options, apikey=apikey, apiroot=apiroot)
+            return argofetch(route, options=options, apikey=apikey, apiroot=apiroot)[0]
 
         ## slice up in time bins:
         start = None
@@ -104,19 +112,20 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
             times.append(times[-1]+delta)
         times.append(end)
         times = [parsetime(x) for x in times]
-
         results = []
         ops = copy.deepcopy(options)
+        delay = 0
         for i in range(len(times)-1):
             ops['startDate'] = times[i]
             ops['endDate'] = times[i+1]
-            results += argofetch(route, options=ops, apikey=apikey, apiroot=apiroot)
-            if 'data' in 'options':
-                time.sleep(1)
+            increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay)
+            results += increment[0]
+            delay = increment[1]
+            time.sleep(increment[1]*0.8) # assume the synchronous request is supplying at least some of delay
         return results
 
     else:
-        return argofetch(route, options=options, apikey=apikey, apiroot=apiroot)
+        return argofetch(route, options=options, apikey=apikey, apiroot=apiroot)[0]
 
 def units_inflate(data_doc, metadata_doc=None):
     # similar to data_inflate, but for units
