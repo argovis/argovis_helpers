@@ -1,4 +1,4 @@
-import requests, datetime, copy, time
+import requests, datetime, copy, time, re
 
 def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', suggestedLatency=0):
     # GET <apiroot>/<route>?<options> with <apikey> in the header.
