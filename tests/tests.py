@@ -16,16 +16,30 @@ class TestClass():
         check basic behavior of argofetch
         '''
 
-        profile = helpers.argofetch('/argo', options={'id': '4901283_021'}, apikey=self.apikey, apiroot=self.apiroot)
+        profile = helpers.argofetch('/argo', options={'id': '4901283_021'}, apikey=self.apikey, apiroot=self.apiroot)[0]
         assert len(profile) == 1, 'should have returned exactly one profile'
         assert profile[0]['geolocation'] == { "type" : "Point", "coordinates" : [ -35.430227, 1.315393 ] }, 'fetched wrong profile'
+
+    def test_bulky_fetch(self):
+        '''
+        make sure argofetch handles rapid requests for the whole globe reasonably
+        '''
+
+        result = []
+        delay = 0
+        for i in range(3):
+            request = helpers.argofetch('/grids/temperature_rg', options={'startDate': '2019-01-01T00:00:00Z', 'endDate': '2019-02-01T00:00:00Z', 'data':'temperature_rg'}, apikey='regular', apiroot=self.apiroot)
+            result += request[0]
+            delay += request[1]
+        assert len(result) == 30, 'should have found 30 grid docs'
+        assert delay > 0, 'should have experienced at least some rate limiter delay'
 
     def test_polygon(self):
         '''
         make sure polygons are getting handled properly
         '''
 
-        profile = helpers.argofetch('/argo', options={'polygon': [[-34,2],[-35,2],[-35,3],[-34,3],[-34,2]]}, apikey=self.apikey, apiroot=self.apiroot)
+        profile = helpers.argofetch('/argo', options={'polygon': [[-34,2],[-35,2],[-35,3],[-34,3],[-34,2]]}, apikey=self.apikey, apiroot=self.apiroot)[0]
         assert len(profile) == 1, 'polygon encompases exactly one profile'
 
     def test_data_inflate(self):
