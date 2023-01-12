@@ -28,10 +28,10 @@ class TestClass():
         result = []
         delay = 0
         for i in range(3):
-            request = helpers.argofetch('/grids/temperature_rg', options={'startDate': '2019-01-01T00:00:00Z', 'endDate': '2019-02-01T00:00:00Z', 'data':'temperature_rg'}, apikey='regular', apiroot=self.apiroot)
+            request = helpers.argofetch('/grids/grid_1_1_0.5_0.5', options={'startDate': '2004-01-01T00:00:00Z', 'endDate': '2004-02-01T00:00:00Z', 'data':'rg09_temperature'}, apikey='regular', apiroot=self.apiroot)
             result += request[0]
             delay += request[1]
-        assert len(result) == 30, 'should have found 30 grid docs'
+        assert len(result) == 60, 'should have found 20x3 grid docs'
         assert delay > 0, 'should have experienced at least some rate limiter delay'
 
     def test_polygon(self):
