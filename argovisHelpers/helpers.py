@@ -70,7 +70,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
     
     r = re.sub('^/', '', route)
     r = re.sub('/$', '', r)
-    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'grids/ohc_kg', 'grids/temperature_rg', 'grids/salinity_rg']
+    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'grids/grid_1_1_0.5_0.5']
     scoped_parameters = {
         'argo': ['id','platform'],
         'cchdo': ['id', 'woceline', 'cchdo_cruise'],
@@ -81,9 +81,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'argo': parsetime("1997-07-27T20:26:20.002Z"),
         'cchdo': parsetime("1977-10-06T00:00:00.000Z"),
         'drifters': parsetime("1987-10-01T13:00:00.000Z"),
-        'grids/ohc_kg': parsetime("2005-01-14T00:00:00.000Z"),
-        'grids/temperature_rg': parsetime("2004-01-14T00:00:00.000Z"),
-        'grids/salinity_rg': parsetime("2004-01-14T00:00:00.000Z"),
+        'grids/grid_1_1_0.5_0.5': parsetime("2004-01-14T00:00:00.000Z"),
         'tc': parsetime("1851-06-24T00:00:00.000Z")
     }
 
@@ -134,4 +132,6 @@ def units_inflate(data_doc, metadata_doc=None):
     data_keys = find_key('data_keys', data_doc, metadata_doc)
 
     return {data_keys[i]:v for i,v in enumerate(units)}
+
+
 
