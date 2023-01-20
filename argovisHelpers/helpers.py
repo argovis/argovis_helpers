@@ -28,14 +28,21 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
 
     return dl, suggestedLatency
 
-def data_inflate(data_doc, metadata_doc=None):
+def data_inflate(data_doc, metadata_doc=None, dataschema='point'):
     # given a single JSON <data_doc> downloaded from one of the standard data routes with compression=array,
     # return the data document with the data key reinflated to per-level dictionaries.
+    # set dataschema='grid' for inflating the data key on gridded data documents.
 
     data = data_doc['data']
     data_keys = find_key('data_keys', data_doc, metadata_doc)
 
-    return [{data_keys[i]: v for i,v in enumerate(level)} for level in data]
+
+    if dataschema == 'point':
+        data = [{data_keys[i]: v for i,v in enumerate(level)} for level in data]
+    elif dataschema == 'grid':
+        data = {data_keys[i]: v for i,v in enumerate(data)}
+    
+    return data
 
 def find_key(key, data_doc, metadata_doc):
     # some metadata keys, like data_keys and units, may appear on either data or metadata documents,
@@ -75,7 +82,8 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'argo': ['id','platform'],
         'cchdo': ['id', 'woceline', 'cchdo_cruise'],
         'drifters': ['id', 'wmo', 'platform'],
-        'tc': ['id', 'name']
+        'tc': ['id', 'name'],
+        'grids/grid_1_1_0.5_0.5': ['id']
     }
     earliest_records = {
         'argo': parsetime("1997-07-27T20:26:20.002Z"),

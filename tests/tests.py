@@ -54,6 +54,18 @@ class TestClass():
         inflate = helpers.data_inflate(data_doc)
         assert inflate == [{'a':1, 'b':2, 'c':3}, {'a':4, 'b':5, 'c':6}], f'simple array didnt inflate correctly, got {inflate}'
 
+    def test_data_inflate_grid(self):
+        '''
+        make sure data_inflate handles grid schema correctly
+        '''
+
+        data_doc = {
+            'data': [[1,2,3],[4,5,6]],
+            'data_keys': ['a','b']
+        }
+        inflate = helpers.data_inflate(data_doc, dataschema='grid')
+        assert inflate == {'a': [1,2,3], 'b': [4,5,6]}, f'grid array didnt inflate correctly, got {inflate}'
+
     def test_find_key(self):
         '''
         check basic behavior of find_key
