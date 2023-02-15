@@ -16,9 +16,9 @@ class TestClass():
         check basic behavior of argofetch
         '''
 
-        profile = helpers.argofetch('/argo', options={'id': '4901283_021'}, apikey=self.apikey, apiroot=self.apiroot)[0]
+        profile = helpers.argofetch('/argo', options={'id': '13857_068'}, apikey=self.apikey, apiroot=self.apiroot)[0]
         assert len(profile) == 1, 'should have returned exactly one profile'
-        assert profile[0]['geolocation'] == { "type" : "Point", "coordinates" : [ -35.430227, 1.315393 ] }, 'fetched wrong profile'
+        assert profile[0]['geolocation'] == { "type" : "Point", "coordinates" : [ -26.257, 3.427 ] }, 'fetched wrong profile'
 
     def test_bulky_fetch(self):
         '''
@@ -28,7 +28,7 @@ class TestClass():
         result = []
         delay = 0
         for i in range(3):
-            request = helpers.argofetch('/grids/grid_1_1_0.5_0.5', options={'startDate': '2004-01-01T00:00:00Z', 'endDate': '2004-02-01T00:00:00Z', 'data':'rg09_temperature'}, apikey='regular', apiroot=self.apiroot)
+            request = helpers.argofetch('/grids/rg09', options={'startDate': '2004-01-01T00:00:00Z', 'endDate': '2004-02-01T00:00:00Z', 'data':'rg09_temperature'}, apikey='regular', apiroot=self.apiroot)
             result += request[0]
             delay += request[1]
         assert len(result) == 60, 'should have found 20x3 grid docs'
@@ -39,7 +39,7 @@ class TestClass():
         make sure polygons are getting handled properly
         '''
 
-        profile = helpers.argofetch('/argo', options={'polygon': [[-34,2],[-35,2],[-35,3],[-34,3],[-34,2]]}, apikey=self.apikey, apiroot=self.apiroot)[0]
+        profile = helpers.argofetch('/argo', options={'polygon': [[-26,3],[-27,3],[-27,4],[-26,4],[-26,3]]}, apikey=self.apikey, apiroot=self.apiroot)[0]
         assert len(profile) == 1, 'polygon encompases exactly one profile'
 
     def test_data_inflate(self):
@@ -49,22 +49,11 @@ class TestClass():
 
         data_doc = {
             'data': [[1,2,3],[4,5,6]],
-            'data_keys': ['a','b','c']
+            'data_info': [['a','b'],[],[]]
         }
         inflate = helpers.data_inflate(data_doc)
-        assert inflate == [{'a':1, 'b':2, 'c':3}, {'a':4, 'b':5, 'c':6}], f'simple array didnt inflate correctly, got {inflate}'
-
-    def test_data_inflate_grid(self):
-        '''
-        make sure data_inflate handles grid schema correctly
-        '''
-
-        data_doc = {
-            'data': [[1,2,3],[4,5,6]],
-            'data_keys': ['a','b']
-        }
-        inflate = helpers.data_inflate(data_doc, dataschema='grid')
-        assert inflate == {'a': [1,2,3], 'b': [4,5,6]}, f'grid array didnt inflate correctly, got {inflate}'
+        print(inflate)
+        assert inflate == [{'a':1, 'b':4}, {'a':2, 'b':5}, {'a':3, 'b':6}], f'simple array didnt inflate correctly, got {inflate}'
 
     def test_find_key(self):
         '''
@@ -111,8 +100,7 @@ class TestClass():
         check basic behavior of units_inflate
         '''
 
-        data = {'metadata': 'meta', 'data_keys': ['a', 'b', 'c']}
-        meta = {'_id': 'meta', 'data_keys': ['a', 'd', 'c'], 'units': ['kg', 's', 'm']}
-        units = helpers.units_inflate(data, meta) 
+        data = {'metadata': 'meta', 'data_info': [['a', 'b', 'c'],['x', 'units'],[[0, 'dbar'],[1, 'kelvin'],[2, 'psu']]]}
+        units = helpers.units_inflate(data) 
 
-        assert units == {'a': 'kg', 'b': 's', 'c': 'm'}, f'failed to reconstruct units dict, got {units}'
+        assert units == {'a': 'dbar', 'b': 'kelvin', 'c': 'psu'}, f'failed to reconstruct units dict, got {units}'
