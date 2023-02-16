@@ -1,5 +1,7 @@
 import requests, datetime, copy, time, re
 
+# networking helpers
+
 def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', suggestedLatency=0):
     # GET <apiroot>/<route>?<options> with <apikey> in the header.
     # raises on anything other than success or a 404.
@@ -28,69 +30,27 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
 
     return dl, suggestedLatency
 
-def data_inflate(data_doc, metadata_doc=None, dataschema='point'):
-    # given a single JSON <data_doc> downloaded from one of the standard data routes with compression=array,
-    # return the data document with the data key reinflated to per-level dictionaries.
-    # set dataschema='grid' for inflating the data key on gridded data documents.
-
-    data = data_doc['data']
-    data_keys = find_key('data_keys', data_doc, metadata_doc)
-
-
-    if dataschema == 'point':
-        data = [{data_keys[i]: v for i,v in enumerate(level)} for level in data]
-    elif dataschema == 'grid':
-        data = {data_keys[i]: v for i,v in enumerate(data)}
-    
-    return data
-
-def find_key(key, data_doc, metadata_doc):
-    # some metadata keys, like data_keys and units, may appear on either data or metadata documents,
-    # and if they appear on both, data_doc takes precedence.
-    # given the pair, find the correct key assignment.
-
-    if key in data_doc:
-        return data_doc[key]
-    else:
-        if metadata_doc is None:
-            raise Exception(f"Please provide metadata document _id {data_doc['metadata']}")
-        if '_id' in metadata_doc and 'metadata' in data_doc and metadata_doc['_id'] != data_doc['metadata']:
-            raise Exception(f"Data document doesn't match metadata document. Data document needs metadata document _id {data_doc['metadata']}, but got {metadata_doc['_id']}")
-
-        return metadata_doc[key]
-
-def parsetime(time):
-    # time can be either an argopy-compliant datestring, or a datetime object; 
-    # returns the opposite.
-
-    if type(time) is str:
-        if '.' not in time:
-            time = time.replace('Z', '.000Z')
-        return datetime.datetime.strptime(time, "%Y-%m-%dT%H:%M:%S.%fZ")
-    elif type(time) is datetime.datetime:
-        return time.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-    else:
-        raise ValueError(time)
-
 def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/'):
     # middleware function between the user and a call to argofetch to make sure individual requests are reasonably scoped and timed.
     
     r = re.sub('^/', '', route)
     r = re.sub('/$', '', r)
-    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'grids/grid_1_1_0.5_0.5']
+    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'grids/rg09', 'grids/kg21']
     scoped_parameters = {
         'argo': ['id','platform'],
         'cchdo': ['id', 'woceline', 'cchdo_cruise'],
         'drifters': ['id', 'wmo', 'platform'],
         'tc': ['id', 'name'],
-        'grids/grid_1_1_0.5_0.5': ['id']
+        'grids/rg09': ['id'],
+        'grids/kg21': ['id']
     }
     earliest_records = {
         'argo': parsetime("1997-07-27T20:26:20.002Z"),
         'cchdo': parsetime("1977-10-06T00:00:00.000Z"),
         'drifters': parsetime("1987-10-01T13:00:00.000Z"),
-        'grids/grid_1_1_0.5_0.5': parsetime("2004-01-14T00:00:00.000Z"),
-        'tc': parsetime("1851-06-24T00:00:00.000Z")
+        'tc': parsetime("1851-06-24T00:00:00.000Z"),
+        'grids/rg09': parsetime("2004-01-14T00:00:00.000Z"),
+        'grids/kg21': parsetime("2004-01-14T00:00:00.000Z")
     }
 
     if r in data_routes:
@@ -133,13 +93,53 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
     else:
         return argofetch(route, options=options, apikey=apikey, apiroot=apiroot)[0]
 
+# data munging helpers
+
+def data_inflate(data_doc, metadata_doc=None):
+    # given a single JSON <data_doc> downloaded from one of the standard data routes,
+    # return the data document with the data key reinflated to per-level dictionaries.
+
+    data = data_doc['data']
+    data_info = find_key('data_info', data_doc, metadata_doc)
+
+    d = zip(*data) # per-variable becomes per-level 
+    return [{data_info[0][i]: v for i,v in enumerate(level)} for level in d]
+
+def find_key(key, data_doc, metadata_doc):
+    # some metadata keys, like data_info, may appear on either data or metadata documents,
+    # and if they appear on both, data_doc takes precedence.
+    # given the pair, find the correct key assignment.
+
+    if key in data_doc:
+        return data_doc[key]
+    else:
+        if metadata_doc is None:
+            raise Exception(f"Please provide metadata document _id {data_doc['metadata']}")
+        if '_id' in metadata_doc and 'metadata' in data_doc and metadata_doc['_id'] != data_doc['metadata']:
+            raise Exception(f"Data document doesn't match metadata document. Data document needs metadata document _id {data_doc['metadata']}, but got {metadata_doc['_id']}")
+
+        return metadata_doc[key]
+
+def parsetime(time):
+    # time can be either an argopy-compliant datestring, or a datetime object; 
+    # returns the opposite.
+
+    if type(time) is str:
+        if '.' not in time:
+            time = time.replace('Z', '.000Z')
+        return datetime.datetime.strptime(time, "%Y-%m-%dT%H:%M:%S.%fZ")
+    elif type(time) is datetime.datetime:
+        return time.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    else:
+        raise ValueError(time)
+
 def units_inflate(data_doc, metadata_doc=None):
     # similar to data_inflate, but for units
 
-    units = find_key('units', data_doc, metadata_doc)
-    data_keys = find_key('data_keys', data_doc, metadata_doc)
+    data_info = find_key('data_info', data_doc, metadata_doc)
+    uindex = data_info[1].index('units')
 
-    return {data_keys[i]:v for i,v in enumerate(units)}
+    return {data_info[0][i]: data_info[2][i][uindex] for i in range(len(data_info[0]))}
 
 
 
