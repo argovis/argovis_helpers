@@ -35,12 +35,13 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
     
     r = re.sub('^/', '', route)
     r = re.sub('/$', '', r)
-    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'grids/rg09', 'grids/kg21']
+    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'argotrajectories', 'grids/rg09', 'grids/kg21']
     scoped_parameters = {
         'argo': ['id','platform'],
         'cchdo': ['id', 'woceline', 'cchdo_cruise'],
         'drifters': ['id', 'wmo', 'platform'],
         'tc': ['id', 'name'],
+        'argotrajectories': ['id', 'platform'],
         'grids/rg09': ['id'],
         'grids/kg21': ['id']
     }
@@ -49,6 +50,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'cchdo': parsetime("1977-10-06T00:00:00.000Z"),
         'drifters': parsetime("1987-10-01T13:00:00.000Z"),
         'tc': parsetime("1851-06-24T00:00:00.000Z"),
+        'argotrajectories': parsetime("2001-01-04T22:46:33.000Z"),
         'grids/rg09': parsetime("2004-01-14T00:00:00.000Z"),
         'grids/kg21': parsetime("2004-01-14T00:00:00.000Z")
     }
@@ -115,7 +117,7 @@ def find_key(key, data_doc, metadata_doc):
     else:
         if metadata_doc is None:
             raise Exception(f"Please provide metadata document _id {data_doc['metadata']}")
-        if '_id' in metadata_doc and 'metadata' in data_doc and metadata_doc['_id'] != data_doc['metadata']:
+        if '_id' in metadata_doc and 'metadata' in data_doc and metadata_doc['_id'] not in data_doc['metadata']:
             raise Exception(f"Data document doesn't match metadata document. Data document needs metadata document _id {data_doc['metadata']}, but got {metadata_doc['_id']}")
 
         return metadata_doc[key]
