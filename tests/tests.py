@@ -60,7 +60,7 @@ class TestClass():
         check basic behavior of find_key
         '''
 
-        data = {'metadata': 'meta', 'a': 1, 'b':2, 'c':3}
+        data = {'metadata': ['meta'], 'a': 1, 'b':2, 'c':3}
         meta = {'_id': 'meta', 'a': 4, 'd':5}
 
         assert helpers.find_key('a', data, meta) == 1, 'find_key should select the entry from data_doc if key appears in both data and metadata'
@@ -100,7 +100,7 @@ class TestClass():
         check basic behavior of units_inflate
         '''
 
-        data = {'metadata': 'meta', 'data_info': [['a', 'b', 'c'],['x', 'units'],[[0, 'dbar'],[1, 'kelvin'],[2, 'psu']]]}
+        data = {'metadata': ['meta'], 'data_info': [['a', 'b', 'c'],['x', 'units'],[[0, 'dbar'],[1, 'kelvin'],[2, 'psu']]]}
         units = helpers.units_inflate(data) 
 
         assert units == {'a': 'dbar', 'b': 'kelvin', 'c': 'psu'}, f'failed to reconstruct units dict, got {units}'
