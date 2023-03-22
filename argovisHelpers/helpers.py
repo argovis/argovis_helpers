@@ -12,20 +12,25 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
             options[option] = str(options[option])
 
     dl = requests.get(apiroot + route, params = options, headers={'x-argokey': apikey})
-    #url = dl.url
+    statuscode = dl.status_code
+    print(dl.url)
     dl = dl.json()
 
-    if 'code' in dl and dl['code'] == 429:
+    if statuscode==429:
         # user exceeded API limit, extract suggested wait and delay times, and try again
         wait = dl['delay'][0]
         latency = dl['delay'][1]
         time.sleep(wait*1.1)
         return argofetch(route, options=o, apikey=apikey, apiroot=apiroot, suggestedLatency=latency)
 
-    if 'code' in dl and dl['code'] != 404:
-        raise Exception(str(dl['code']) + ': ' + dl['message'])
+    if statuscode!=404 and statuscode!=200:
+        if statuscode == 413:
+            print('The temporospatial extent of your request is enormous! Consider using the `query` helper in this package to split it up into more manageable chunks.')
+        elif statuscode >= 500:
+            print("Argovis' servers experienced an error. Please try your request again, and email argovis@colorado.edu if this keeps happening; please include the full details of the the request you made so we can help address.")
+        raise Exception(statuscode)
 
-    if ('code' in dl and dl['code']==404) or (type(dl[0]) is dict and 'code' in dl[0] and dl[0]['code']==404):
+    if (statuscode==404) or (type(dl[0]) is dict and 'code' in dl[0] and dl[0]['code']==404):
         return [], suggestedLatency
 
     return dl, suggestedLatency
