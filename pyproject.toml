@@ -15,7 +15,8 @@ classifiers = [
     "Programming Language :: Python :: 3",
 ]
 dependencies = [
-    "requests"
+    "requests",
+    "area"
 ]
 requires-python = ">=3.9"
 

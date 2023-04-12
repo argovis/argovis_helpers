@@ -87,6 +87,16 @@ class TestClass():
         response = helpers.query('/tc', options={'startDate': '1851-05-26T00:00:00Z', 'endDate': '1852-01-01T00:00:00Z'}, apikey=self.apikey, apiroot=self.apiroot)
         assert len(response) == 9, f'should be able to query entire globe for 6 months, with time divisions landing exactly on one timestamp, and get back 9 tcs, instead got {response}'
 
+    def test_big_poly(self):
+        '''
+        query with polygon big enough to trigger lune slices behind the scenes
+        note  TC ID AL041851_18510816000000 is fudged to sit on longitude 45, right on a lune boundary
+        '''
+
+        response = helpers.query('/tc', options={'startDate': '1851-05-26T00:00:00Z', 'endDate': '1852-01-01T00:00:00Z', 'polygon': [[-40,60],[-100,60],[-100,-60],[-40,-60],[-40,60]]}, apikey=self.apikey, apiroot=self.apiroot)
+        assert len(response) == 9, f'should be able to query entire globe for 6 months, with time divisions landing exactly on one timestamp, and get back 9 tcs, instead got {len(response)}'
+
+
     def test_query_vocab(self):
         '''
         check basic behavior of vocab query

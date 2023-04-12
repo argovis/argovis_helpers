@@ -1,8 +1,8 @@
-import requests, datetime, copy, time, re
+import requests, datetime, copy, time, re, area
 
 # networking helpers
 
-def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', suggestedLatency=0):
+def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', suggestedLatency=0, verbose=False):
     # GET <apiroot>/<route>?<options> with <apikey> in the header.
     # raises on anything other than success or a 404.
 
@@ -13,7 +13,8 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
 
     dl = requests.get(apiroot + route, params = options, headers={'x-argokey': apikey})
     statuscode = dl.status_code
-    print(dl.url)
+    if verbose:
+        print(dl.url)
     dl = dl.json()
 
     if statuscode==429:
@@ -21,7 +22,7 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
         wait = dl['delay'][0]
         latency = dl['delay'][1]
         time.sleep(wait*1.1)
-        return argofetch(route, options=o, apikey=apikey, apiroot=apiroot, suggestedLatency=latency)
+        return argofetch(route, options=o, apikey=apikey, apiroot=apiroot, suggestedLatency=latency, verbose=verbose)
 
     if statuscode!=404 and statuscode!=200:
         if statuscode == 413:
@@ -35,7 +36,7 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
 
     return dl, suggestedLatency
 
-def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/'):
+def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', verbose=False):
     # middleware function between the user and a call to argofetch to make sure individual requests are reasonably scoped and timed.
     
     r = re.sub('^/', '', route)
@@ -59,13 +60,27 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'grids/rg09': parsetime("2004-01-14T00:00:00.000Z"),
         'grids/kg21': parsetime("2004-01-14T00:00:00.000Z")
     }
+    lunes = [
+        [[-180,90],[-180,-90],[-135,-90],[-135,90],[-180,90]],
+        [[-135,90],[-135,-90],[-90,-90],[-90,90],[-135,90]],
+        [[-90,90],[-90,-90],[-45,-90],[-45,90],[-90,90]],
+        [[-45,90],[-45,-90],[0,-90],[0,90],[-45,90]],
+        [[0,90],[0,-90],[45,-90],[45,90],[0,90]],
+        [[45,90],[45,-90],[90,-90],[90,90],[45,90]],
+        [[90,90],[90,-90],[135,-90],[135,90],[90,90]],
+        [[135,90],[135,-90],[180,-90],[180,90],[135,90]]
+    ]
+
+    isEnormous = False
+    if 'polygon' in options and area.area({'type':'Polygon','coordinates':[ options['polygon'] ]}) > 4856761026901.346: # 20x20 deg near the equator
+        isEnormous = True
 
     if r in data_routes:
         # these are potentially large requests that might need to be sliced up
 
         ## if a data query carries a scoped parameter, no need to slice up:
         if r in scoped_parameters and not set(scoped_parameters[r]).isdisjoint(options.keys()):
-            return argofetch(route, options=options, apikey=apikey, apiroot=apiroot)[0]
+            return argofetch(route, options=options, apikey=apikey, apiroot=apiroot, verbose=verbose)[0]
 
         ## slice up in time bins:
         start = None
@@ -89,16 +104,32 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         ops = copy.deepcopy(options)
         delay = 0
         for i in range(len(times)-1):
-            ops['startDate'] = times[i]
-            ops['endDate'] = times[i+1]
-            increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay)
-            results += increment[0]
-            delay = increment[1]
-            time.sleep(increment[1]*0.8) # assume the synchronous request is supplying at least some of delay
+            if isEnormous:
+                # slice up a large geo region
+                if 'polygon' in ops:
+                    del ops['polygon']
+                for lune in lunes:
+                    ops['multipolygon'] = [lune, options['polygon']]
+                    ops['startDate'] = times[i]
+                    ops['endDate'] = times[i+1]
+                    increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
+                    results += increment[0]
+                    delay = increment[1]
+                    time.sleep(increment[1]*0.8) # assume the synchronous request is supplying at least some of delay
+            else:
+                ops['startDate'] = times[i]
+                ops['endDate'] = times[i+1]
+                increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
+                results += increment[0]
+                delay = increment[1]
+                time.sleep(increment[1]*0.8) # assume the synchronous request is supplying at least some of delay
+        if isEnormous:
+            # duplication may have occured if a record sits exactly on a lune boundary, dedupe
+            results = list({item['_id']:item for item in results}.values())
         return results
 
     else:
-        return argofetch(route, options=options, apikey=apikey, apiroot=apiroot)[0]
+        return argofetch(route, options=options, apikey=apikey, apiroot=apiroot, verbose=verbose)[0]
 
 # data munging helpers
 
