@@ -1,4 +1,4 @@
-import requests, datetime, copy, time, re, area
+import requests, datetime, copy, time, re, area, math
 
 # networking helpers
 
@@ -61,29 +61,6 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'grids/kg21': parsetime("2004-01-14T00:00:00.000Z")
     }
 
-    isEnormous = False
-    if 'polygon' in options and area.area({'type':'Polygon','coordinates':[ options['polygon'] ]}) > 4856761026901.346: # 20x20 deg near the equator
-        isEnormous = True
-        nSections = 4
-        longitudes = list(map(lambda x : x[0], options['polygon'])) 
-        latitudes = list(map(lambda x : x[1], options['polygon']))
-        minLong = min(longitudes)
-        maxLong = max(longitudes)
-        longDelta = (maxLong-minLong)/nSections
-        minLat = min(latitudes)
-        maxLat = max(latitudes)
-        sections = [
-                        [
-                            [minLong+i*longDelta, maxLat],
-                            [minLong+i*longDelta, minLat],
-                            [minLong+(i+1)*longDelta,minLat],
-                            [minLong+(i+1)*longDelta,maxLat],
-                            [minLong+i*longDelta,maxLat]
-                        ] 
-                        for i in range(nSections)
-                ] 
-
-
     if r in data_routes:
         # these are potentially large requests that might need to be sliced up
 
@@ -103,7 +80,18 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         else:
             end = datetime.datetime.now()
 
-        delta = datetime.timedelta(days=30)
+        ### determine appropriate bin size
+        maxbulk = 1000000 # should be <= maxbulk used in generating an API 413
+        timestep = 30 # days
+        if 'polygon' in options:
+            extent = area.area({'type':'Polygon','coordinates':[ options['polygon'] ]}) / 13000 / 1000000 # poly area in units of 13000 sq. km. blocks
+            timestep = math.floor(maxbulk / extent)
+        elif 'multipolygon' in options:
+            extents = [area.area({'type':'Polygon','coordinates':[x]}) for x in options['multipolygon']]
+            extent = min(extents)
+            timestep = math.floor(maxbulk / extent)
+
+        delta = datetime.timedelta(days=timestep)
         times = [start]
         while times[-1] + delta < end:
             times.append(times[-1]+delta)
@@ -113,28 +101,12 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         ops = copy.deepcopy(options)
         delay = 0
         for i in range(len(times)-1):
-            if isEnormous:
-                # slice up a large geo region
-                if 'polygon' in ops:
-                    del ops['polygon']
-                for section in sections:
-                    ops['multipolygon'] = [section, options['polygon']]
-                    ops['startDate'] = times[i]
-                    ops['endDate'] = times[i+1]
-                    increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
-                    results += increment[0]
-                    delay = increment[1]
-                    time.sleep(increment[1]*0.8) # assume the synchronous request is supplying at least some of delay
-            else:
-                ops['startDate'] = times[i]
-                ops['endDate'] = times[i+1]
-                increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
-                results += increment[0]
-                delay = increment[1]
-                time.sleep(increment[1]*0.8) # assume the synchronous request is supplying at least some of delay
-        if isEnormous:
-            # duplication may have occured if a record sits exactly on a section boundary, dedupe
-            results = list({item['_id']:item for item in results}.values())
+            ops['startDate'] = times[i]
+            ops['endDate'] = times[i+1]
+            increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
+            results += increment[0]
+            delay = increment[1]
+            time.sleep(increment[1]*0.8) # assume the synchronous request is supplying at least some of delay
         return results
 
     else:
