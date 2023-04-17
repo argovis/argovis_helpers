@@ -60,20 +60,29 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'grids/rg09': parsetime("2004-01-14T00:00:00.000Z"),
         'grids/kg21': parsetime("2004-01-14T00:00:00.000Z")
     }
-    lunes = [
-        [[-180,90],[-180,-90],[-135,-90],[-135,90],[-180,90]],
-        [[-135,90],[-135,-90],[-90,-90],[-90,90],[-135,90]],
-        [[-90,90],[-90,-90],[-45,-90],[-45,90],[-90,90]],
-        [[-45,90],[-45,-90],[0,-90],[0,90],[-45,90]],
-        [[0,90],[0,-90],[45,-90],[45,90],[0,90]],
-        [[45,90],[45,-90],[90,-90],[90,90],[45,90]],
-        [[90,90],[90,-90],[135,-90],[135,90],[90,90]],
-        [[135,90],[135,-90],[180,-90],[180,90],[135,90]]
-    ]
 
     isEnormous = False
     if 'polygon' in options and area.area({'type':'Polygon','coordinates':[ options['polygon'] ]}) > 4856761026901.346: # 20x20 deg near the equator
         isEnormous = True
+        nSections = 4
+        longitudes = list(map(lambda x : x[0], options['polygon'])) 
+        latitudes = list(map(lambda x : x[1], options['polygon']))
+        minLong = min(longitudes)
+        maxLong = max(longitudes)
+        longDelta = (maxLong-minLong)/nSections
+        minLat = min(latitudes)
+        maxLat = max(latitudes)
+        sections = [
+                        [
+                            [minLong+i*longDelta, maxLat],
+                            [minLong+i*longDelta, minLat],
+                            [minLong+(i+1)*longDelta,minLat],
+                            [minLong+(i+1)*longDelta,maxLat],
+                            [minLong+i*longDelta,maxLat]
+                        ] 
+                        for i in range(nSections)
+                ] 
+
 
     if r in data_routes:
         # these are potentially large requests that might need to be sliced up
@@ -108,8 +117,8 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
                 # slice up a large geo region
                 if 'polygon' in ops:
                     del ops['polygon']
-                for lune in lunes:
-                    ops['multipolygon'] = [lune, options['polygon']]
+                for section in sections:
+                    ops['multipolygon'] = [section, options['polygon']]
                     ops['startDate'] = times[i]
                     ops['endDate'] = times[i+1]
                     increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
@@ -124,7 +133,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
                 delay = increment[1]
                 time.sleep(increment[1]*0.8) # assume the synchronous request is supplying at least some of delay
         if isEnormous:
-            # duplication may have occured if a record sits exactly on a lune boundary, dedupe
+            # duplication may have occured if a record sits exactly on a section boundary, dedupe
             results = list({item['_id']:item for item in results}.values())
         return results
 
