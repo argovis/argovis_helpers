@@ -42,6 +42,14 @@ class TestClass():
         profile = helpers.argofetch('/argo', options={'polygon': [[-26,3],[-27,3],[-27,4],[-26,4],[-26,3]]}, apikey=self.apikey, apiroot=self.apiroot)[0]
         assert len(profile) == 1, 'polygon encompases exactly one profile'
 
+    def test_multipolygon(self):
+        '''
+        make sure multipolygons are getting handled properly
+        '''
+
+        profiles = helpers.query('/argo', options={'multipolygon': [[[152,42],[153,42],[153,43],[152,43],[152,42]], [[152.2,42],[153.2,42],[153.2,43],[152.2,43],[152.2,42]]]}, apikey=self.apikey, apiroot=self.apiroot, verbose=True)
+        assert len(profiles) == 2, 'multipolygon encompases two profiles in intersection'
+
     def test_data_inflate(self):
         '''
         check basic behavior of data_inflate
