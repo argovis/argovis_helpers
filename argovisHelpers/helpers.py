@@ -38,7 +38,6 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
 
 def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', verbose=False):
     # middleware function between the user and a call to argofetch to make sure individual requests are reasonably scoped and timed.
-    
     r = re.sub('^/', '', route)
     r = re.sub('/$', '', r)
     data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'argotrajectories', 'grids/rg09', 'grids/kg21']
@@ -83,11 +82,12 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         ### determine appropriate bin size
         maxbulk = 1000000 # should be <= maxbulk used in generating an API 413
         timestep = 30 # days
+
         if 'polygon' in options:
             extent = area.area({'type':'Polygon','coordinates':[ options['polygon'] ]}) / 13000 / 1000000 # poly area in units of 13000 sq. km. blocks
             timestep = math.floor(maxbulk / extent)
         elif 'multipolygon' in options:
-            extents = [area.area({'type':'Polygon','coordinates':[x]}) for x in options['multipolygon']]
+            extents = [area.area({'type':'Polygon','coordinates':[x]}) / 13000 / 1000000 for x in options['multipolygon']]
             extent = min(extents)
             timestep = math.floor(maxbulk / extent)
 
