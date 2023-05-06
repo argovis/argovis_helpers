@@ -85,11 +85,11 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
 
         if 'polygon' in options:
             extent = area.area({'type':'Polygon','coordinates':[ options['polygon'] ]}) / 13000 / 1000000 # poly area in units of 13000 sq. km. blocks
-            timestep = math.floor(maxbulk / extent)
+            timestep = min(400, math.floor(maxbulk / extent))
         elif 'multipolygon' in options:
             extents = [area.area({'type':'Polygon','coordinates':[x]}) / 13000 / 1000000 for x in options['multipolygon']]
             extent = min(extents)
-            timestep = math.floor(maxbulk / extent)
+            timestep = min(400,math.floor(maxbulk / extent))
 
         delta = datetime.timedelta(days=timestep)
         times = [start]
