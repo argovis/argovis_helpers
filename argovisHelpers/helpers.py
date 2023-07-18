@@ -40,7 +40,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
     # middleware function between the user and a call to argofetch to make sure individual requests are reasonably scoped and timed.
     r = re.sub('^/', '', route)
     r = re.sub('/$', '', r)
-    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'argotrajectories', 'grids/rg09', 'grids/kg21']
+    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'argotrajectories', 'grids/rg09', 'grids/kg21', 'noaasst', 'copernicussla']
     scoped_parameters = {
         'argo': ['id','platform'],
         'cchdo': ['id', 'woceline', 'cchdo_cruise'],
@@ -48,7 +48,9 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'tc': ['id', 'name'],
         'argotrajectories': ['id', 'platform'],
         'grids/rg09': ['id'],
-        'grids/kg21': ['id']
+        'grids/kg21': ['id'],
+        'noaasst': ['id'],
+        'copernicussla': ['id']
     }
     earliest_records = {
         'argo': parsetime("1997-07-27T20:26:20.002Z"),
@@ -57,7 +59,9 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'tc': parsetime("1851-06-24T00:00:00.000Z"),
         'argotrajectories': parsetime("2001-01-04T22:46:33.000Z"),
         'grids/rg09': parsetime("2004-01-14T00:00:00.000Z"),
-        'grids/kg21': parsetime("2004-01-14T00:00:00.000Z")
+        'grids/kg21': parsetime("2004-01-14T00:00:00.000Z"),
+        'noaasst': parsetime("1989-12-31T00:00:00.000Z"),
+        'copernicussla': parsetime("1993-01-10T00:00:00Z")
     }
 
     if r in data_routes:
