@@ -40,7 +40,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
     # middleware function between the user and a call to argofetch to make sure individual requests are reasonably scoped and timed.
     r = re.sub('^/', '', route)
     r = re.sub('/$', '', r)
-    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'argotrajectories', 'grids/rg09', 'grids/kg21', 'noaasst', 'copernicussla']
+    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'argotrajectories', 'grids/rg09', 'grids/kg21', 'grids/glodap' 'noaasst', 'copernicussla']
     scoped_parameters = {
         'argo': ['id','platform'],
         'cchdo': ['id', 'woceline', 'cchdo_cruise'],
@@ -49,19 +49,34 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'argotrajectories': ['id', 'platform'],
         'grids/rg09': ['id'],
         'grids/kg21': ['id'],
+        'grids/glodap': ['id'],
         'noaasst': ['id'],
         'copernicussla': ['id']
     }
     earliest_records = {
         'argo': parsetime("1997-07-27T20:26:20.002Z"),
-        'cchdo': parsetime("1977-10-06T00:00:00.000Z"),
+        'cchdo': parsetime("1972-07-23T09:11:00.000Z"),
         'drifters': parsetime("1987-10-01T13:00:00.000Z"),
         'tc': parsetime("1851-06-24T00:00:00.000Z"),
-        'argotrajectories': parsetime("2001-01-04T22:46:33.000Z"),
+        'argotrajectories': parsetime("2001-01-03T22:46:33.000Z"),
         'grids/rg09': parsetime("2004-01-14T00:00:00.000Z"),
-        'grids/kg21': parsetime("2004-01-14T00:00:00.000Z"),
-        'noaasst': parsetime("1989-12-31T00:00:00.000Z"),
-        'copernicussla': parsetime("1993-01-10T00:00:00Z")
+        'grids/kg21': parsetime("2005-01-14T00:00:00.000Z"),
+        'grids/glodap': parsetime("0001-01-01T00:00:00.000Z"),
+        'noaasst': parsetime("1989-12-30T00:00:00.000Z"),
+        'copernicussla': parsetime("1993-01-09T00:00:00Z")
+    }
+
+    last_records = {
+        'argo': datetime.datetime.now(),
+        'cchdo': parsetime("2023-03-10T17:48:00.000Z"),
+        'drifters': parsetime("2020-07-01T23:00:00.000Z"),
+        'tc': parsetime("2020-12-26T12:00:00.000Z"),
+        'argotrajectories': parsetime("2021-01-02T01:13:26.000Z"),
+        'grids/rg09': parsetime("2022-05-16T00:00:00.000Z"),
+        'grids/kg21': parsetime("2020-12-16T00:00:00.000Z"),
+        'grids/glodap': parsetime("0001-01-02T00:00:00.000Z"),
+        'noaasst': parsetime("2023-01-30T00:00:00.000Z"),
+        'copernicussla': parsetime("2022-08-01T00:00:00.000Z")
     }
 
     if r in data_routes:
@@ -81,7 +96,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         if 'endDate' in options:
             end = parsetime(options['endDate'])
         else:
-            end = datetime.datetime.now()
+            end = last_records[r]
 
         ### determine appropriate bin size
         maxbulk = 1000000 # should be <= maxbulk used in generating an API 413
