@@ -1,4 +1,4 @@
-FROM argovis/argovis_helpers:test-base-230412
+FROM argovis/argovis_helpers:test-base-231026
 
 WORKDIR /app
 COPY . .
