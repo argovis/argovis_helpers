@@ -266,9 +266,3 @@ def generate_geojson(labeled_map, label, index2coords, connected_poles=True, per
 
     # map indexes back onto real locations and return the geojson
     return {"type": "MultiPolygon", "coordinates": [[[index2coords(index) for index in poly] for poly in loop] for loop in loops]}, flags
-
-
-
-
-
-
