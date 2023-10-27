@@ -1,0 +1,27 @@
+name: unit_testing
+
+on:
+  pull_request:
+    branches:
+      - "main"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      database:
+        image: argovis/testdb:0.36
+      redis:
+        image: redis:7.0.2
+      api:
+        image: argovis/api:2.14.2
+        env:
+          ARGONODE: core
+
+    container: iquod/wodpy:test-base-230716
+    steps:
+      - name: checkout
+        uses: actions/checkout@v2
+      - name: run_tests
+        run: pytest 
