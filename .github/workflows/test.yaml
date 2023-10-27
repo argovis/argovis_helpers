@@ -24,5 +24,5 @@ jobs:
       - name: checkout
         uses: actions/checkout@v2
       - name: run_tests
-        run: pytest 
+        run: pytest tests/*.py
 
