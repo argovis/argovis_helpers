@@ -8,7 +8,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    container: iquod/wodpy:test-base-230716
+    container: argovis/argovis_helpers:test-base-231026
 
     services:
       database:
