@@ -1,35 +1,29 @@
 from argovisHelpers import gridtools
-import numpy
+import numpy, pytest
 
-class TestClass():
-    def setUp(self):   
-        return
+def test_label_features_basic():
+	binary_features = [
+		[0,0,0,0,0,0,0,0],
+		[0,1,1,0,0,0,0,0],
+		[0,1,1,0,0,0,0,0],
+		[0,0,0,1,0,0,0,0],
+		[0,0,0,0,0,0,0,0],
+		[0,0,0,0,0,1,1,0],
+		[0,0,0,0,0,1,0,0],
+		[0,0,0,0,0,0,0,0]
+	]
 
-    def tearDown(self):
-        return
+	correct_labels = numpy.array([
+		[0,0,0,0,0,0,0,0],
+		[0,1,1,0,0,0,0,0],
+		[0,1,1,0,0,0,0,0],
+		[0,0,0,1,0,0,0,0],
+		[0,0,0,0,0,0,0,0],
+		[0,0,0,0,0,2,2,0],
+		[0,0,0,0,0,2,0,0],
+		[0,0,0,0,0,0,0,0]
+	])
 
-    def test_label_features_basic(self):
-    	binary_features = [
-    		[0,0,0,0,0,0,0,0],
-    		[0,1,1,0,0,0,0,0],
-    		[0,1,1,0,0,0,0,0],
-    		[0,0,0,1,0,0,0,0],
-    		[0,0,0,0,0,0,0,0],
-    		[0,0,0,0,0,1,1,0],
-    		[0,0,0,0,0,1,0,0],
-    		[0,0,0,0,0,0,0,0]
-    	]
+	labeled_map = gridtools.label_features(binary_features)
+	assert correct_labels.tolist() == labeled_map.tolist()
 
-    	correct_labels = numpy.array([
-    		[0,0,0,0,0,0,0,0],
-    		[0,1,1,0,0,0,0,0],
-    		[0,1,1,0,0,0,0,0],
-    		[0,0,0,1,0,0,0,0],
-    		[0,0,0,0,0,0,0,0],
-    		[0,0,0,0,0,2,2,0],
-    		[0,0,0,0,0,2,0,0],
-    		[0,0,0,0,0,0,0,0]
-    	])
-
-    	labeled_map = gridtools.label_features(binary_features)
-    	assert correct_labels.tolist() == labeled_map.tolist()

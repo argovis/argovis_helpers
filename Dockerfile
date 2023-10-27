@@ -1,5 +1,6 @@
-FROM argovis/argovis_helpers:test-base-231026
+FROM python:3.9
 
+RUN apt-get update -y && apt-get install -y nano
+RUN pip install requests pytest area numpy scipy
 WORKDIR /app
 COPY . .
-CMD nosetests tests/*.py
