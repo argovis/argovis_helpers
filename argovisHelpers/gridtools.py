@@ -5,12 +5,26 @@ def label_features(feature_map, structure=[[1,1,1],[1,1,1],[1,1,1]], connected_p
     # label distinct isolated features. 
     # periodic_dateline = True makes a periodic boundary on the inner index
     # connected_poles = True makes all features touching a pole connected
+
     labeled_map = scipy.ndimage.label(feature_map, structure=structure)[0]
+
     # periodic boundary
     if periodic_dateline:
-        for y in range(labeled_map.shape[0]):
-            if labeled_map[y, 0] > 0 and labeled_map[y, -1] > 0:
-                labeled_map[labeled_map == labeled_map[y, -1]] = labeled_map[y, 0]
+        if structure == [[0,1,0],[1,1,1],[0,1,0]]:
+            # no diag
+            for y in range(labeled_map.shape[0]):
+                if labeled_map[y, 0] > 0 and labeled_map[y, -1] > 0:
+                    labeled_map[labeled_map == labeled_map[y, -1]] = labeled_map[y, 0]
+        elif structure == [[1,1,1],[1,1,1],[1,1,1]]:
+            # diagonally connected
+            for y in range(labeled_map.shape[0]):
+                if labeled_map[y, 0] > 0 and labeled_map[y, -1] > 0:
+                    labeled_map[labeled_map == labeled_map[y, -1]] = labeled_map[y, 0]
+                elif labeled_map[y, 0] > 0 and labeled_map[max(y-1,0), -1]  > 0:
+                    labeled_map[labeled_map == labeled_map[max(y-1,0), -1]] = labeled_map[y, 0]
+                elif labeled_map[y, 0] > 0 and labeled_map[min(y+1,labeled_map.shape[0]-1), -1]  > 0:
+                    labeled_map[labeled_map == labeled_map[min(y+1,labeled_map.shape[0]-1), -1]] = labeled_map[y, 0]
+          
     # connected poles
     if connected_poles:
         spole_features = [x for x in numpy.unique(labeled_map[0]) if x > 0]
