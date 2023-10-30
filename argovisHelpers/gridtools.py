@@ -183,6 +183,17 @@ def transform_facing_and_position(currentFacing, change):
     else:
         raise Exception(f'no valid change found {currentFacing}, {change}')
 
+def isccw(polygon):
+    # given a polygon [[x0,y0],...[xn,yn],[x0,y0]],
+    # return True if points have ccw winding and false if cw winding.
+
+    metric = 0
+    for i, vertex in enumerate(polygon):
+        metric += (polygon[(i+1)%len(polygon)][0] - vertex[0])*(polygon[(i+1)%len(polygon)][1] + vertex[1])
+        print(metric)
+
+    return metric < 0
+
 def generate_geojson(labeled_map, label, index2coords, connected_poles=True, periodic_dateline=True):
     # given a map <labeled_map> returned by label_features and the <label> of interest,
     # and a function index2coords that takes [lat_idx, lon_idx] and returns [lon, lat]
