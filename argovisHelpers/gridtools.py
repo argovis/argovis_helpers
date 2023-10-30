@@ -196,6 +196,8 @@ def is_ccw_winding(coordinates):
     poslong.sort()
     if len(poslong) > 0:
         west_limit = min(poslong)
+        if west_limit == 0 and len(neglong) > 0: # special case since 0 gets lumped in with 'positive' longitudes
+            west_limit = min(neglong)
     else:
         west_limit = min(neglong)
     if len(neglong) > 0:

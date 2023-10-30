@@ -467,6 +467,12 @@ def test_isccw_basic():
 	loop = [[0,0],[1,0],[1,1],[0,1],[0,0]]
 	assert gridtools.is_ccw_winding(loop)
 
+def test_isccw_otherside():
+	# what if east edge is exactly 0 long?
+
+	loop = [[-1,0],[0,0],[0,1],[-1,1],[-1,0]]
+	assert gridtools.is_ccw_winding(loop)
+
 def test_isccw_dateline():
 	# winding checker on dateline
 
