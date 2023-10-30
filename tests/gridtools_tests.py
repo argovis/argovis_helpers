@@ -478,3 +478,5 @@ def test_isccw_dateline():
 
 	loop = [[-179, 0], [179, 0], [179, 1], [-179, 1], [-179, 0]]
 	assert not gridtools.is_ccw_winding(loop)
+	loop.reverse()
+	assert gridtools.is_ccw_winding(loop)

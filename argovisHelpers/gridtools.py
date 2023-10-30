@@ -227,7 +227,7 @@ def is_ccw_winding(coordinates):
     else:
         raise Exception(f'unconsidered winding option')
 
-def generate_geojson(labeled_map, label, index2coords, connected_poles=True, periodic_dateline=True):
+def generate_geojson(labeled_map, label, index2coords, connected_poles=True, periodic_dateline=True, enforce_CCW=True):
     # given a map <labeled_map> returned by label_features and the <label> of interest,
     # and a function index2coords that takes [lat_idx, lon_idx] and returns [lon, lat]
     # return a valid geojson MultiPolygon representing the labeled feature.
@@ -322,5 +322,14 @@ def generate_geojson(labeled_map, label, index2coords, connected_poles=True, per
                 reduced_poly.insert(2, poly[math.floor(len(poly)/2)+1])
             loops[j][k] = reduced_poly
 
-    # map indexes back onto real locations and return the geojson
-    return {"type": "MultiPolygon", "coordinates": [[[index2coords(index) for index in poly] for poly in loop] for loop in loops]}, flags
+    # map indexes back onto real locations
+    coords = [[[index2coords(index) for index in poly] for poly in loop] for loop in loops]
+
+    # make sure all loops are CCW
+    if enforce_CCW:
+        for i, blob in coords:
+            for j, loop in blob:
+                if not is_ccw_winding(loop):
+                    coords[i][j].reverse()
+
+    return {"type": "MultiPolygon", "coordinates": coords}, flags
