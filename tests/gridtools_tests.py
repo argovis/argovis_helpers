@@ -1,20 +1,21 @@
 from argovisHelpers import gridtools
 import numpy, pytest, copy
+from functools import partial
 
 @pytest.fixture
 def index_transform():
 	def index2coords(longitudes, latitudes, index):
 	    # index [lat_idx, lon_idx]; return [lon, lat]
-	    lon = longitudes[index[1]] - 5./16.
+	    lon = longitudes[index[1]] - 22.5
 	    if lon < -180:
 	        lon += 360.
 
 	    if index[0] == 0:
 	        lat = -90
-	    elif index[0] == 361:
+	    elif index[0] == 8:
 	        lat = 90
 	    else:
-	        lat = latitudes[index[0]] - 0.25
+	        lat = latitudes[index[0]] - 11.25
 
 	    return [lon, lat]
 
@@ -505,7 +506,7 @@ def test_trace_shape_basic():
 		[0,0,0,0,0,0,0,0],
 		[0,1,1,0,0,0,0,0],
 		[0,1,1,0,0,0,0,0],
-		[0,0,0,1,0,0,0,0],
+		[0,0,0,0,0,0,0,0],
 		[0,0,0,0,0,0,0,0],
 		[0,0,0,0,0,1,1,0],
 		[0,0,0,0,0,1,0,0],
@@ -513,7 +514,7 @@ def test_trace_shape_basic():
 	]
 
 	labeled_map = gridtools.label_features(binary_features)
-	correct_vertexes = [[1,1],[1,2],[1,3],[2,3],[3,3],[3,4],[4,4],[4,3],[3,3],[3,2],[3,1],[2,1],[1,1]]
+	correct_vertexes = [[1,1],[1,2],[1,3],[2,3],[3,3],[3,2],[3,1],[2,1],[1,1]]
 	vertexes = gridtools.trace_shape(labeled_map, 1, nlatsteps=8)[0]
 	assert isCircular(correct_vertexes, vertexes) or isCircular(correct_vertexes[0], vertexes, reverse=True)
 
@@ -521,8 +522,28 @@ def test_trace_shape_basic():
 	vertexes = gridtools.trace_shape(labeled_map, 2, nlatsteps=8)
 	assert isCircular(correct_vertexes[0][:-1], vertexes[0][:-1]) or isCircular(correct_vertexes[0][:-1], vertexes[0][:-1], reverse=True)
 
-def test_trace_shape_first_pole():
-	# trace shape around points diagonally connected across a pole
+def test_trace_shape_dateline():
+	# trace a shape bridging the dateline
+	binary_features = [
+		[0,0,0,0,0,0,0,0],
+		[0,0,0,0,0,0,0,0],
+		[0,0,0,0,0,0,0,0],
+		[1,0,0,0,0,0,0,1],
+		[0,0,0,0,0,0,0,0],
+		[0,0,0,0,0,0,0,0],
+		[0,0,0,0,0,0,0,0],
+		[0,0,0,0,0,0,0,0]
+	]
+
+	labeled_map = gridtools.label_features(binary_features)
+	correct_vertexes = [[3,0],[3,1],[4,1],[4,0],[4,7],[3,7],[3,0]]
+	vertexes = gridtools.trace_shape(labeled_map, 1, nlatsteps=8)[0]
+	assert isCircular(correct_vertexes, vertexes) or isCircular(correct_vertexes[0], vertexes, reverse=True)
+
+# geojson generation ------------------------------------------
+
+def test_generate_geojson_first_pole(index_transform):
+	# generate geojson for pathological shape at pole
 	binary_features = [
 		[0,0,1,0,0,1,0,0],
 		[0,0,1,0,0,0,0,0],
@@ -535,14 +556,12 @@ def test_trace_shape_first_pole():
 	]
 
 	labeled_map = gridtools.label_features(binary_features)
-	vertexes = gridtools.trace_shape(labeled_map, 1, nlatsteps=8)
-	correct_vertexes = [ [[0,2],[1,2],[2,2],[2,3],[1,3],[0,3],[0,2]], [[0,5],[1,5],[1,6],[0,6],[0,5]] ]
-	print(vertexes)
-	print(correct_vertexes)
-	assert isCircular(correct_vertexes[0][:-1], vertexes[0][:-1]) or isCircular(correct_vertexes[0][:-1], vertexes[0][:-1], reverse=True)
-	assert isCircular(correct_vertexes[1][:-1], vertexes[1][:-1]) or isCircular(correct_vertexes[1][:-1], vertexes[1][:-1], reverse=True)
-
-
+	geo = gridtools.generate_geojson(labeled_map, 1, partial(index_transform,[0,45,90,135,180,225,270,315],[-90,-67.5,-45,-22.5,0,22.5,45,67.5,90]))
+	correct_geo = ({'type': 'MultiPolygon', 'coordinates': [[[[67.5, -90], [112.5, -90], [112.5, -56.25], [67.5, -56.25], [67.5, -90]]], [[[202.5, -90], [247.5, -90], [247.5, -78.75], [202.5, -78.75], [202.5, -90]]]]}, {'first_pole'})
+	# correct_geo logic:
+	# latitudes: top bound is -90, bottom of first row is half a latitude step, bottom of second row is 1.5 lat steps
+	# longitudes: center of third column is 90; center of 6th is 225
+	assert geo == correct_geo
 
 
 

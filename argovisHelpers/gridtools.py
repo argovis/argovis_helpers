@@ -40,6 +40,7 @@ def label_features(feature_map, structure=[[1,1,1],[1,1,1],[1,1,1]], connected_p
 
 def trace_shape(labeled_map, label, nlatsteps=361):
     # trace the shape labeled with <label> in the map returned by label_features
+    # note this function assumes a labeled_map without diagonal connections, behavior with diagonal connections is undefined
 
     nlon = len(labeled_map[0])
 
@@ -227,7 +228,7 @@ def is_ccw_winding(coordinates):
     else:
         raise Exception(f'unconsidered winding option')
 
-def generate_geojson(labeled_map, label, index2coords, connected_poles=True, periodic_dateline=True, enforce_CCW=True):
+def generate_geojson(labeled_map, label, index2coords, periodic_dateline=True, enforce_CCW=True):
     # given a map <labeled_map> returned by label_features and the <label> of interest,
     # and a function index2coords that takes [lat_idx, lon_idx] and returns [lon, lat]
     # return a valid geojson MultiPolygon representing the labeled feature.
@@ -236,7 +237,7 @@ def generate_geojson(labeled_map, label, index2coords, connected_poles=True, per
     flags = set(())
     local_map = copy.deepcopy(labeled_map)
     local_map[labeled_map != label] = 0 # gets rid of other ARs in a the AR binary flag map
-    local_sublabels_map = label_features(local_map, structure=[[0,1,0],[1,1,1],[0,1,0]], connected_poles=True, periodic_dateline=True)
+    local_sublabels_map = label_features(local_map, structure=[[0,1,0],[1,1,1],[0,1,0]], connected_poles=False, periodic_dateline=periodic_dateline)
     local_sublabels = [x for x in numpy.unique(local_sublabels_map) if x != 0] # these are the rings that belong as top level objects in this blob
 
     # get the outer loops
@@ -327,8 +328,8 @@ def generate_geojson(labeled_map, label, index2coords, connected_poles=True, per
 
     # make sure all loops are CCW
     if enforce_CCW:
-        for i, blob in coords:
-            for j, loop in blob:
+        for i, blob in enumerate(coords):
+            for j, loop in enumerate(blob):
                 if not is_ccw_winding(loop):
                     coords[i][j].reverse()
 
