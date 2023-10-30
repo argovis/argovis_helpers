@@ -1,6 +1,25 @@
 from argovisHelpers import gridtools
 import numpy, pytest
 
+@pytest.fixture
+def index_transform():
+	def index2coords(longitudes, latitudes, index):
+	    # index [lat_idx, lon_idx]; return [lon, lat]
+	    lon = longitudes[index[1]] - 5./16.
+	    if lon < -180:
+	        lon += 360.
+
+	    if index[0] == 0:
+	        lat = -90
+	    elif index[0] == 361:
+	        lat = 90
+	    else:
+	        lat = latitudes[index[0]] - 0.25
+
+	    return [lon, lat]
+
+	return index2coords
+
 # basic feature labeling --------------------------------------------------
 
 def test_label_features_basic():
@@ -446,4 +465,10 @@ def test_isccw_basic():
 	# basic test of winding checker
 
 	loop = [[0,0],[1,0],[1,1],[0,1],[0,0]]
-	assert gridtools.isccw(loop)
+	assert gridtools.is_ccw_winding(loop)
+
+def test_isccw_dateline():
+	# winding checker on dateline
+
+	loop = [[-179, 0], [179, 0], [179, 1], [-179, 1], [-179, 0]]
+	assert not gridtools.is_ccw_winding(loop)

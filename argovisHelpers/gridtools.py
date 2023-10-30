@@ -183,16 +183,47 @@ def transform_facing_and_position(currentFacing, change):
     else:
         raise Exception(f'no valid change found {currentFacing}, {change}')
 
-def isccw(polygon):
-    # given a polygon [[x0,y0],...[xn,yn],[x0,y0]],
-    # return True if points have ccw winding and false if cw winding.
+def is_ccw_winding(coordinates):
+    # given a polygon [[lon0,lat0],...[lon_n,lat_n],[lon0,lat0]] with longitudes on [-180,180]
+    # return True if points have ccw winding and False if cw winding.
 
-    metric = 0
-    for i, vertex in enumerate(polygon):
-        metric += (polygon[(i+1)%len(polygon)][0] - vertex[0])*(polygon[(i+1)%len(polygon)][1] + vertex[1])
-        print(metric)
+    north_limit = max(coordinates, key=lambda x: x[1])[1]
+    south_limit = min(coordinates, key=lambda x: x[1])[1]
+    longitudes = [x[0] for x in coordinates]
+    neglong = list(filter(lambda x: x < 0, longitudes))
+    neglong.sort()
+    poslong = list(filter(lambda x: x >= 0, longitudes))
+    poslong.sort()
+    if len(poslong) > 0:
+        west_limit = min(poslong)
+    else:
+        west_limit = min(neglong)
+    if len(neglong) > 0:
+        east_limit = max(neglong)
+    else:
+        east_limit = max(poslong)
 
-    return metric < 0
+    # find first occurances of NWSE limits:
+    first_north = -1
+    first_west = -1
+    first_south = -1
+    first_east = -1
+    for i in range(len(coordinates)):
+        if first_north == -1 and coordinates[i][1] == north_limit:
+            first_north = i
+        if first_south == -1 and coordinates[i][1] == south_limit:
+            first_south = i
+        if first_west == -1 and coordinates[i][0] == west_limit:
+            first_west = i
+        if first_east == -1 and coordinates[i][0] == east_limit:
+            first_east = i
+
+    if 0 <= first_west % first_north and first_west % first_north <= first_south % first_north and first_south % first_north <= first_east % first_north:
+        return True
+    elif 0 <= first_east % first_north and first_east % first_north <= first_south % first_north and first_south % first_north <= first_west % first_north:
+        return False
+    else:
+        raise Exception(f'unconsidered winding option')
 
 def generate_geojson(labeled_map, label, index2coords, connected_poles=True, periodic_dateline=True):
     # given a map <labeled_map> returned by label_features and the <label> of interest,
