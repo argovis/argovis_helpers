@@ -1,5 +1,5 @@
 from argovisHelpers import gridtools
-import numpy, pytest
+import numpy, pytest, copy
 
 @pytest.fixture
 def index_transform():
@@ -480,3 +480,81 @@ def test_isccw_dateline():
 	assert not gridtools.is_ccw_winding(loop)
 	loop.reverse()
 	assert gridtools.is_ccw_winding(loop)
+
+# shape tracing -------------------------------------------
+
+def isCircular(arr1, arr2, reverse=False):
+	a1 = copy.deepcopy(arr1)
+	a2 = copy.deepcopy(arr2)
+	if reverse:
+		a1.reverse()
+
+	if len(a1) != len(a2):
+		return False
+
+	str1 = ' '.join(map(str, a1))
+	str2 = ' '.join(map(str, a2))
+	if len(str1) != len(str2):
+		return False
+
+	return str1 in str2 + ' ' + str2
+
+def test_trace_shape_basic():
+	# simple check for two distinct regions
+	binary_features = [
+		[0,0,0,0,0,0,0,0],
+		[0,1,1,0,0,0,0,0],
+		[0,1,1,0,0,0,0,0],
+		[0,0,0,1,0,0,0,0],
+		[0,0,0,0,0,0,0,0],
+		[0,0,0,0,0,1,1,0],
+		[0,0,0,0,0,1,0,0],
+		[0,0,0,0,0,0,0,0]
+	]
+
+	labeled_map = gridtools.label_features(binary_features)
+	correct_vertexes = [[1,1],[1,2],[1,3],[2,3],[3,3],[3,4],[4,4],[4,3],[3,3],[3,2],[3,1],[2,1],[1,1]]
+	vertexes = gridtools.trace_shape(labeled_map, 1, nlatsteps=8)[0]
+	assert isCircular(correct_vertexes, vertexes) or isCircular(correct_vertexes[0], vertexes, reverse=True)
+
+	correct_vertexes = [[[5,5],[5,6],[5,7],[6,7],[6,6],[7,6],[7,5],[6,5],[5,5]]]
+	vertexes = gridtools.trace_shape(labeled_map, 2, nlatsteps=8)
+	assert isCircular(correct_vertexes[0][:-1], vertexes[0][:-1]) or isCircular(correct_vertexes[0][:-1], vertexes[0][:-1], reverse=True)
+
+def test_trace_shape_first_pole():
+	# trace shape around points diagonally connected across a pole
+	binary_features = [
+		[0,0,1,0,0,1,0,0],
+		[0,0,1,0,0,0,0,0],
+		[0,0,0,0,0,0,0,0],
+		[0,0,0,0,0,0,0,0],
+		[0,0,0,0,0,0,0,0],
+		[0,0,0,0,0,0,0,0],
+		[0,0,0,0,0,0,0,0],
+		[0,0,0,0,0,0,0,0]
+	]
+
+	labeled_map = gridtools.label_features(binary_features)
+	vertexes = gridtools.trace_shape(labeled_map, 1, nlatsteps=8)
+	correct_vertexes = [ [[0,2],[1,2],[2,2],[2,3],[1,3],[0,3],[0,2]], [[0,5],[1,5],[1,6],[0,6],[0,5]] ]
+	print(vertexes)
+	print(correct_vertexes)
+	assert isCircular(correct_vertexes[0][:-1], vertexes[0][:-1]) or isCircular(correct_vertexes[0][:-1], vertexes[0][:-1], reverse=True)
+	assert isCircular(correct_vertexes[1][:-1], vertexes[1][:-1]) or isCircular(correct_vertexes[1][:-1], vertexes[1][:-1], reverse=True)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
