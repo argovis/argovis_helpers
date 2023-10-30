@@ -237,7 +237,7 @@ def generate_geojson(labeled_map, label, index2coords, periodic_dateline=True, e
     flags = set(())
     local_map = copy.deepcopy(labeled_map)
     local_map[labeled_map != label] = 0 # gets rid of other ARs in a the AR binary flag map
-    local_sublabels_map = label_features(local_map, structure=[[0,1,0],[1,1,1],[0,1,0]], connected_poles=False, periodic_dateline=periodic_dateline)
+    local_sublabels_map = label_features(local_map, structure=[[0,1,0],[1,1,1],[0,1,0]], connected_poles=False, periodic_dateline=periodic_dateline) # don't connect the poles here, want to trace_shape on non-diagonally connected subregions
     local_sublabels = [x for x in numpy.unique(local_sublabels_map) if x != 0] # these are the rings that belong as top level objects in this blob
 
     # get the outer loops
