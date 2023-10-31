@@ -38,16 +38,20 @@ def label_features(feature_map, structure=[[1,1,1],[1,1,1],[1,1,1]], connected_p
 
     return labeled_map
 
-def trace_shape(labeled_map, label, nlatsteps=361):
-    # trace the shape labeled with <label> in the map returned by label_features
+def trace_shape(labeled_map, label, nlatsteps=361, winding='CCW'):
+    # trace the shape labeled with <label> in the map returned by label_features, in the direction indicated by winding, either CW or CCW
     # note this function assumes a labeled_map without diagonal connections, behavior with diagonal connections is undefined
 
     nlon = len(labeled_map[0])
 
     # find a top edge, and take its two top vertexes as the first two boundary vertexes, in order
     cells = numpy.where(labeled_map == label)
-    vertexes = [[cells[0][0],cells[1][0]], [cells[0][0],(cells[1][0]+1) % nlon]]
-    facing = 'R'
+    if winding == 'CW':
+        vertexes = [[cells[0][0],cells[1][0]], [cells[0][0],(cells[1][0]+1) % nlon]]
+        facing = 'R'
+    else:
+        vertexes = [[cells[0][0],(cells[1][0]+1) % nlon], [cells[0][0],cells[1][0]]]
+        facing = 'L'
     while not numpy.array_equal(vertexes[0], vertexes[-1]):
         # determine which pattern we're in as a function of present vertex and direction
         # make the appropriate move to generate nextvertex, and append it to vertexes
@@ -184,50 +188,6 @@ def transform_facing_and_position(currentFacing, change):
     else:
         raise Exception(f'no valid change found {currentFacing}, {change}')
 
-def is_ccw_winding(coordinates):
-    # given a polygon [[lon0,lat0],...[lon_n,lat_n],[lon0,lat0]] with longitudes on [-180,180]
-    # return True if points have ccw winding and False if cw winding.
-
-    north_limit = max(coordinates, key=lambda x: x[1])[1]
-    south_limit = min(coordinates, key=lambda x: x[1])[1]
-    longitudes = [x[0] for x in coordinates]
-    neglong = list(filter(lambda x: x < 0, longitudes))
-    neglong.sort()
-    poslong = list(filter(lambda x: x >= 0, longitudes))
-    poslong.sort()
-    if len(poslong) > 0:
-        west_limit = min(poslong)
-        if west_limit == 0 and len(neglong) > 0: # special case since 0 gets lumped in with 'positive' longitudes
-            west_limit = min(neglong)
-    else:
-        west_limit = min(neglong)
-    if len(neglong) > 0:
-        east_limit = max(neglong)
-    else:
-        east_limit = max(poslong)
-
-    # find first occurances of NWSE limits:
-    first_north = -1
-    first_west = -1
-    first_south = -1
-    first_east = -1
-    for i in range(len(coordinates)):
-        if first_north == -1 and coordinates[i][1] == north_limit:
-            first_north = i
-        if first_south == -1 and coordinates[i][1] == south_limit:
-            first_south = i
-        if first_west == -1 and coordinates[i][0] == west_limit:
-            first_west = i
-        if first_east == -1 and coordinates[i][0] == east_limit:
-            first_east = i 
-
-    if 0 <= (first_west-first_north) % len(coordinates) and (first_west-first_north) % len(coordinates) <= (first_south-first_north) % len(coordinates) and (first_south-first_north) % len(coordinates) <= (first_east-first_north) % len(coordinates):
-        return True
-    elif 0 <= (first_east-first_north) % len(coordinates) and (first_east-first_north) % len(coordinates) <= (first_south-first_north) % len(coordinates) and (first_south-first_north) % len(coordinates) <= (first_west-first_north) % len(coordinates):
-        return False
-    else:
-        raise Exception(f'unconsidered winding option')
-
 def generate_geojson(labeled_map, label, index2coords, periodic_dateline=True, enforce_CCW=True):
     # given a map <labeled_map> returned by label_features and the <label> of interest,
     # and a function index2coords that takes [lat_idx, lon_idx] and returns [lon, lat]
@@ -325,12 +285,5 @@ def generate_geojson(labeled_map, label, index2coords, periodic_dateline=True, e
 
     # map indexes back onto real locations
     coords = [[[index2coords(index) for index in poly] for poly in loop] for loop in loops]
-
-    # make sure all loops are CCW
-    if enforce_CCW:
-        for i, blob in enumerate(coords):
-            for j, loop in enumerate(blob):
-                if not is_ccw_winding(loop):
-                    coords[i][j].reverse()
 
     return {"type": "MultiPolygon", "coordinates": coords}, flags

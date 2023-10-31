@@ -460,33 +460,6 @@ def test_label_holes_internal_island():
 	labeled_map = gridtools.label_features(binary_features)
 	assert correct_labels.tolist() == labeled_map.tolist()
 
-# winding helpers ----------------------------------------
-
-def test_isccw_basic():
-	# basic test of winding checker
-
-	loop = [[0,0],[1,0],[1,1],[0,1],[0,0]]
-	assert gridtools.is_ccw_winding(loop)
-
-def test_isccw_otherside():
-	# what if east edge is exactly 0 long?
-
-	loop = [[-1,0],[0,0],[0,1],[-1,1],[-1,0]]
-	assert gridtools.is_ccw_winding(loop)
-
-def test_isccw_dateline():
-	# winding checker on dateline
-
-	loop = [[-179, 0], [179, 0], [179, 1], [-179, 1], [-179, 0]]
-	assert not gridtools.is_ccw_winding(loop)
-	loop.reverse()
-	assert gridtools.is_ccw_winding(loop)
-
-def test_isccw_edge231031():
-
-	loop = [[100,-60],[150,-60],[150,60],[99,60],[100,-60] ]
-	assert gridtools.is_ccw_winding(loop)
-
 # shape tracing -------------------------------------------
 
 def isCircular(arr1, arr2, reverse=False):
@@ -517,15 +490,15 @@ def test_trace_shape_basic():
 		[0,0,0,0,0,1,0,0],
 		[0,0,0,0,0,0,0,0]
 	]
-
 	labeled_map = gridtools.label_features(binary_features)
-	correct_vertexes = [[1,1],[1,2],[1,3],[2,3],[3,3],[3,2],[3,1],[2,1],[1,1]]
+	
+	correct_vertexes = [[1,1],[2,1],[3,1],[3,2],[3,3],[2,3],[1,3],[1,2],[1,1]] # should be CCW
 	vertexes = gridtools.trace_shape(labeled_map, 1, nlatsteps=8)[0]
-	assert isCircular(correct_vertexes, vertexes) or isCircular(correct_vertexes[0], vertexes, reverse=True)
+	assert isCircular(correct_vertexes[:-1], vertexes[:-1]) # note slice off the last polygon-closing vertex, will be arbitraily different depending on starting point
 
-	correct_vertexes = [[[5,5],[5,6],[5,7],[6,7],[6,6],[7,6],[7,5],[6,5],[5,5]]]
-	vertexes = gridtools.trace_shape(labeled_map, 2, nlatsteps=8)
-	assert isCircular(correct_vertexes[0][:-1], vertexes[0][:-1]) or isCircular(correct_vertexes[0][:-1], vertexes[0][:-1], reverse=True)
+	correct_vertexes = [[5,5],[6,5],[7,5],[7,6],[6,6],[6,7],[5,7],[5,6],[5,5]]
+	vertexes = gridtools.trace_shape(labeled_map, 2, nlatsteps=8)[0]
+	assert isCircular(correct_vertexes[:-1], vertexes[:-1]) 
 
 def test_trace_shape_dateline():
 	# trace a shape bridging the dateline
@@ -539,11 +512,11 @@ def test_trace_shape_dateline():
 		[0,0,0,0,0,0,0,0],
 		[0,0,0,0,0,0,0,0]
 	]
-
 	labeled_map = gridtools.label_features(binary_features)
-	correct_vertexes = [[3,0],[3,1],[4,1],[4,0],[4,7],[3,7],[3,0]]
+
+	correct_vertexes = [[3,0],[3,7],[4,7],[4,0],[4,1],[3,1],[3,0]]
 	vertexes = gridtools.trace_shape(labeled_map, 1, nlatsteps=8)[0]
-	assert isCircular(correct_vertexes, vertexes) or isCircular(correct_vertexes[0], vertexes, reverse=True)
+	assert isCircular(correct_vertexes[:-1], vertexes[:-1])
 
 # geojson generation ------------------------------------------
 
@@ -559,10 +532,12 @@ def test_generate_geojson_first_pole(index_transform):
 		[0,0,0,0,0,0,0,0],
 		[0,0,0,0,0,0,0,0]
 	]
-
 	labeled_map = gridtools.label_features(binary_features)
+
 	geo = gridtools.generate_geojson(labeled_map, 1, partial(index_transform,[0,45,90,135,180,225,270,315],[-90,-67.5,-45,-22.5,0,22.5,45,67.5,90]))
 	correct_geo = ({'type': 'MultiPolygon', 'coordinates': [[[[67.5, -90], [112.5, -90], [112.5, -56.25], [67.5, -56.25], [67.5, -90]]], [[[202.5, -90], [247.5, -90], [247.5, -78.75], [202.5, -78.75], [202.5, -90]]]]}, {'first_pole'})
+	print(geo)
+	print(correct_geo)
 	# correct_geo logic:
 	# latitudes: top bound is -90, bottom of first row is half a latitude step, bottom of second row is 1.5 lat steps
 	# longitudes: center of third column is 90; center of 6th is 225
