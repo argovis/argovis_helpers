@@ -1,4 +1,4 @@
-import scipy, numpy, copy
+import scipy, numpy, copy, math
 
 def label_features(feature_map, structure=[[1,1,1],[1,1,1],[1,1,1]], connected_poles=True, periodic_dateline=True):
     # given a 2D numpy array feature_map[latitude][longitude] labeling features with 1 and voids with 0,
@@ -38,11 +38,12 @@ def label_features(feature_map, structure=[[1,1,1],[1,1,1],[1,1,1]], connected_p
 
     return labeled_map
 
-def trace_shape(labeled_map, label, nlatsteps=361, winding='CCW'):
+def trace_shape(labeled_map, label, winding='CCW'):
     # trace the shape labeled with <label> in the map returned by label_features, in the direction indicated by winding, either CW or CCW
     # note this function assumes a labeled_map without diagonal connections, behavior with diagonal connections is undefined
 
     nlon = len(labeled_map[0])
+    nlat = len(labeled_map)
 
     # find a top edge, and take its two top vertexes as the first two boundary vertexes, in order
     cells = numpy.where(labeled_map == label)
@@ -70,7 +71,7 @@ def trace_shape(labeled_map, label, nlatsteps=361, winding='CCW'):
             facing, delta_iLat, delta_iLon = choose_move(label, labeled_map, n_vertexes[-1][0], n_vertexes[-1][1], facing)
             n_vertexes.append([n_vertexes[-1][0]+delta_iLat, (n_vertexes[-1][1]+delta_iLon)%nlon])
         # decide who is the blob and who is the hole
-        n_vertexes_north = len([x for x in n_vertexes if x[0] > nlatsteps/2])
+        n_vertexes_north = len([x for x in n_vertexes if x[0] > nlat/2])
         if n_vertexes_north / len(n_vertexes):
             # most points are in the northern hemisphere, n_vertexes is the hole
             return [vertexes, n_vertexes]
@@ -188,11 +189,12 @@ def transform_facing_and_position(currentFacing, change):
     else:
         raise Exception(f'no valid change found {currentFacing}, {change}')
 
-def generate_geojson(labeled_map, label, index2coords, periodic_dateline=True, enforce_CCW=True):
+def generate_geojson(labeled_map, label, index2coords, periodic_dateline=True, enforce_CCW=True, reverse_winding=False):
     # given a map <labeled_map> returned by label_features and the <label> of interest,
     # and a function index2coords that takes [lat_idx, lon_idx] and returns [lon, lat]
     # return a valid geojson MultiPolygon representing the labeled feature.
     # <connected_poles> and <periodic_dateline> should be the same as used when creating <labeled_map>
+    # reverse_winding=True reverses the winding set by trace_shape; use this if an axis is flipped, ie sothern latitudes are at lower indexes, at the 'top' of the grid.
 
     flags = set(())
     local_map = copy.deepcopy(labeled_map)
@@ -260,7 +262,7 @@ def generate_geojson(labeled_map, label, index2coords, periodic_dateline=True, e
             if h == 0:
                 continue
             else:
-                vertexes = trace_shape(holes, h)[0]
+                vertexes = trace_shape(holes, h, winding='CW')[0]
                 loops[j].append(vertexes)
                 flags.add('holes')
 
@@ -285,5 +287,10 @@ def generate_geojson(labeled_map, label, index2coords, periodic_dateline=True, e
 
     # map indexes back onto real locations
     coords = [[[index2coords(index) for index in poly] for poly in loop] for loop in loops]
+
+    if reverse_winding:
+        for i, blob in enumerate(coords):
+            for j, loop in enumerate(blob):
+                coords[i][j].reverse()
 
     return {"type": "MultiPolygon", "coordinates": coords}, flags
