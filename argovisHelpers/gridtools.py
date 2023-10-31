@@ -220,7 +220,7 @@ def is_ccw_winding(coordinates):
             first_west = i
         if first_east == -1 and coordinates[i][0] == east_limit:
             first_east = i 
-    print(first_north, first_west, first_south, first_east)
+
     if 0 <= (first_west-first_north) % len(coordinates) and (first_west-first_north) % len(coordinates) <= (first_south-first_north) % len(coordinates) and (first_south-first_north) % len(coordinates) <= (first_east-first_north) % len(coordinates):
         return True
     elif 0 <= (first_east-first_north) % len(coordinates) and (first_east-first_north) % len(coordinates) <= (first_south-first_north) % len(coordinates) and (first_south-first_north) % len(coordinates) <= (first_west-first_north) % len(coordinates):
