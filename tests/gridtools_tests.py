@@ -482,6 +482,11 @@ def test_isccw_dateline():
 	loop.reverse()
 	assert gridtools.is_ccw_winding(loop)
 
+def test_isccw_edge231031():
+
+	loop = [[100,-60],[150,-60],[150,60],[99,60],[100,-60] ]
+	assert gridtools.is_ccw_winding(loop)
+
 # shape tracing -------------------------------------------
 
 def isCircular(arr1, arr2, reverse=False):

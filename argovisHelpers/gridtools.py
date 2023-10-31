@@ -219,11 +219,11 @@ def is_ccw_winding(coordinates):
         if first_west == -1 and coordinates[i][0] == west_limit:
             first_west = i
         if first_east == -1 and coordinates[i][0] == east_limit:
-            first_east = i
-
-    if 0 <= first_west % first_north and first_west % first_north <= first_south % first_north and first_south % first_north <= first_east % first_north:
+            first_east = i 
+    print(first_north, first_west, first_south, first_east)
+    if 0 <= (first_west-first_north) % first_north and (first_west-first_north) % first_north <= (first_south-first_north) % first_north and (first_south-first_north) % first_north <= (first_east-first_north) % first_north:
         return True
-    elif 0 <= first_east % first_north and first_east % first_north <= first_south % first_north and first_south % first_north <= first_west % first_north:
+    elif 0 <= (first_east-first_north) % first_north and (first_east-first_north) % first_north <= (first_south-first_north) % first_north and (first_south-first_north) % first_north <= (first_west-first_north) % first_north:
         return False
     else:
         raise Exception(f'unconsidered winding option')
