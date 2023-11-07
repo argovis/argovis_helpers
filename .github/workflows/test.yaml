@@ -8,6 +8,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    container: argovis/argovis_helpers:test-base-231026
 
     services:
       database:
@@ -19,9 +20,8 @@ jobs:
         env:
           ARGONODE: core
 
-    container: iquod/wodpy:test-base-230716
     steps:
       - name: checkout
         uses: actions/checkout@v2
       - name: run_tests
-        run: pytest 
+        run: pytest tests/*.py

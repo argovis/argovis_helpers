@@ -1,5 +1,5 @@
-FROM argovis/argovis_helpers:test-base-230412
+FROM python:3.9
 
+RUN pip install requests pytest area numpy scipy
 WORKDIR /app
 COPY . .
-CMD nosetests tests/*.py
