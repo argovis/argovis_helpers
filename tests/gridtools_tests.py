@@ -570,7 +570,7 @@ def test_generate_geojson_first_pole(index_transform):
 	labeled_map = gridtools.label_features(binary_features)
 
 	geo = gridtools.generate_geojson(labeled_map, 1, partial(index_transform,[0,45,90,135,180,225,270,315],[-90,-67.5,-45,-22.5,0,22.5,45,67.5,90]), reverse_winding=True)[0]
-	correct_geo = {'type': 'MultiPolygon', 'coordinates': [[[[67.5, -90], [112.5, -90], [112.5, -56.25], [67.5, -56.25], [67.5, -90]]], [[[202.5, -90], [247.5, -90], [247.5, -78.75], [202.5, -78.75], [202.5, -90]]]]}
+	correct_geo = {'type': 'MultiPolygon', 'coordinates': [[[[67.5, -90], [112.5, -90], [112.5, -78.75], [112.5, -56.25], [67.5, -56.25], [67.5, -78.75], [67.5, -90]]], [[[202.5, -90], [247.5, -90], [247.5, -78.75], [202.5, -78.75], [202.5, -90]]]]}
 	# correct_geo logic:
 	# latitudes: top bound is -90, bottom of first row is half a latitude step, bottom of second row is 1.5 lat steps
 	# longitudes: center of third column is 90; center of 6th is 225
@@ -617,7 +617,7 @@ def test_first_annulus_winding(index_transform):
 	labeled_map = gridtools.label_features(binary_features)	
 
 	geo = gridtools.generate_geojson(labeled_map, 1, partial(index_transform,[0,45,90,135,180,225,270,315],[-90,-67.5,-45,-22.5,0,22.5,45,67.5,90]), reverse_winding=True)[0]
-	correct_geo = {'type': 'MultiPolygon', 'coordinates': [[[[292.5, -56.25], [157.5, -56.25], [112.5, -56.25], [292.5, -56.25]], [[22.5, -78.75], [157.5, -78.75], [202.5, -78.75], [22.5, -78.75]]]]}
+	correct_geo = {'type': 'MultiPolygon', 'coordinates': [[[[292.5, -56.25], [247.5, -56.25], [202.5, -56.25], [157.5, -56.25], [112.5, -56.25], [67.5, -56.25], [22.5, -56.25], [-22.5, -56.25], [292.5, -56.25]], [[22.5, -78.75], [67.5, -78.75], [112.5, -78.75], [157.5, -78.75], [202.5, -78.75], [247.5, -78.75], [292.5, -78.75], [-22.5, -78.75], [22.5, -78.75]]]]}
 
 	for i, blob in enumerate(geo['coordinates']):
 		for j, loop in enumerate(blob):
@@ -640,7 +640,7 @@ def test_last_annulus_winding(index_transform):
 	labeled_map = gridtools.label_features(binary_features)	
 
 	geo = gridtools.generate_geojson(labeled_map, 1, partial(index_transform,[0,45,90,135,180,225,270,315],[-90,-67.5,-45,-22.5,0,22.5,45,67.5,90]), reverse_winding=True)[0]
-	correct_geo = {'type': 'MultiPolygon', 'coordinates': [[[[22.5, 33.75], [157.5, 33.75], [202.5, 33.75], [22.5, 33.75]], [[292.5, 56.25], [157.5, 56.25], [112.5, 56.25], [292.5, 56.25]]]]}
+	correct_geo = {'type': 'MultiPolygon', 'coordinates': [[[[22.5, 33.75], [67.5, 33.75], [112.5, 33.75], [157.5, 33.75], [202.5, 33.75], [247.5, 33.75], [292.5, 33.75], [-22.5, 33.75], [22.5, 33.75]], [[292.5, 56.25], [247.5, 56.25], [202.5, 56.25], [157.5, 56.25], [112.5, 56.25], [67.5, 56.25], [22.5, 56.25], [-22.5, 56.25], [292.5, 56.25]]]]}
 
 	for i, blob in enumerate(geo['coordinates']):
 		for j, loop in enumerate(blob):
