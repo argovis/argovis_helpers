@@ -24,10 +24,10 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
         time.sleep(wait*1.1)
         return argofetch(route, options=o, apikey=apikey, apiroot=apiroot, suggestedLatency=latency, verbose=verbose)
 
-    if statuscode!=404 and statuscode!=200:
+    if (statuscode!=404 and statuscode!=200) or (statuscode==200 and type(dl) is dict and 'code' in dl):
         if statuscode == 413:
             print('The temporospatial extent of your request is enormous! Consider using the `query` helper in this package to split it up into more manageable chunks.')
-        elif statuscode >= 500:
+        elif statuscode >= 500 or (statuscode==200 and type(dl) is dict and 'code' in dl):
             print("Argovis' servers experienced an error. Please try your request again, and email argovis@colorado.edu if this keeps happening; please include the full details of the the request you made so we can help address.")
         raise Exception(statuscode)
 
@@ -41,7 +41,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
     r = re.sub('^/', '', route)
     r = re.sub('/$', '', r)
 
-    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'argotrajectories', 'grids/rg09', 'grids/kg21', 'grids/glodap' 'timeseries/noaasst', 'timeseries/copernicussla', 'timeseries/ccmpwind']
+    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'argotrajectories', 'easyocean', 'grids/rg09', 'grids/kg21', 'grids/glodap' 'timeseries/noaasst', 'timeseries/copernicussla', 'timeseries/ccmpwind']
     
     scoped_parameters = {
         'argo': ['id','platform'],
@@ -49,6 +49,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'drifters': ['id', 'wmo', 'platform'],
         'tc': ['id', 'name'],
         'argotrajectories': ['id', 'platform'],
+        'easyocean': ['id', 'woceline'],
         'grids/rg09': ['id'],
         'grids/kg21': ['id'],
         'grids/glodap': ['id'],
@@ -63,6 +64,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'drifters': parsetime("1987-10-01T13:00:00.000Z"),
         'tc': parsetime("1851-06-24T00:00:00.000Z"),
         'argotrajectories': parsetime("2001-01-03T22:46:33.000Z"),
+        'easyocean': parsetime("1983-10-08T00:00:00.000Z"),
         'grids/rg09': parsetime("2004-01-14T00:00:00.000Z"),
         'grids/kg21': parsetime("2005-01-14T00:00:00.000Z"),
         'grids/glodap': parsetime("0001-01-01T00:00:00.000Z"),
@@ -71,12 +73,14 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'timeseries/ccmpwind': parsetime("1993-01-02T00:00:00Z")
     }
 
+    # plus a day vs the API, just to make sure we don't artificially cut off 
     last_records = {
         'argo': datetime.datetime.now(),
         'cchdo': parsetime("2023-03-10T17:48:00.000Z"),
         'drifters': parsetime("2020-07-01T23:00:00.000Z"),
         'tc': parsetime("2020-12-26T12:00:00.000Z"),
         'argotrajectories': parsetime("2021-01-02T01:13:26.000Z"),
+        'easyocean': parsetime("2022-10-17T00:00:00.000Z"),
         'grids/rg09': parsetime("2022-05-16T00:00:00.000Z"),
         'grids/kg21': parsetime("2020-12-16T00:00:00.000Z"),
         'grids/glodap': parsetime("0001-01-02T00:00:00.000Z"),
