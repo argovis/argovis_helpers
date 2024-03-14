@@ -7,7 +7,7 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
     # raises on anything other than success or a 404.
 
     o = copy.deepcopy(options)
-    for option in ['polygon', 'multipolygon']:
+    for option in ['polygon', 'multipolygon', 'box']:
         if option in options:
             options[option] = str(options[option])
 
@@ -119,6 +119,9 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
             extents = [area.area({'type':'Polygon','coordinates':[x]}) / 13000 / 1000000 for x in options['multipolygon']]
             extent = min(extents)
             timestep = min(400,math.floor(maxbulk / extent))
+        elif 'box' in options:
+            extent = area.area({'type':'Polygon','coordinates':[[ options['box'][0], [options['box'][1][0], options['box'][0][0]], options['box'][1], [options['box'][0][0], options['box'][1][0]], options['box'][0]]]}) / 13000 / 1000000
+            timestep = min(400, math.floor(maxbulk / extent))
 
         delta = datetime.timedelta(days=timestep)
         times = [start]
