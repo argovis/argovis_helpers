@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "argovisHelpers"
-version = "0.0.16"
+version = "0.0.17"
 description = "Helper functions to consume and parse information from University of Colorado's Argovis API."
 readme = "README.md"
-authors = [{name = "Bill Mills" }]
+authors = [{name = "Katie Mills" }]
 license = { file = "LICENSE" }
 classifiers = [
     "License :: OSI Approved :: MIT License",
