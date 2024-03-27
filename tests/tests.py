@@ -158,7 +158,7 @@ def test_timeseries_recombo(apiroot, apikey):
     make sure a timeseries request that gets forcibly sliced is recombined correctly
     '''
 
-    slice_response = helpers.query('/timeseries/ccmpwind', options={'polygon': [[-100,-60],[100,-60],[100,60],[-100,60],[-100,-60]]}, apikey=apikey, apiroot=apiroot, verbose=True)
+    slice_response = helpers.query('/timeseries/ccmpwind', options={'polygon': [[-10,-10],[10,-10],[10,10],[-10,10],[-10,-10]]}, apikey=apikey, apiroot=apiroot, verbose=True)
     noslice_response = helpers.query('/timeseries/ccmpwind', options={'id': '0.125_0.125'}, apikey=apikey, apiroot=apiroot)
     print(slice_response)
     print(noslice_response)
