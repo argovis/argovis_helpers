@@ -153,6 +153,15 @@ def test_combine_dicts(apiroot, apikey):
         {'geolocation':{'type': 'Point', 'coordinates':[20,20]}, 'level':2.1, 'timeseries':[3,4,5], 'data': [[1001,2001,3001],[4001,5001,6001]]}
     ], 'failed to combine timeseries fragments correctly'
 
+def test_timeseries_recombo(apiroot, apikey):
+    '''
+    make sure a timeseries request that gets forcibly sliced is recombined correctly
+    '''
+
+    slice_response = helpers.query('/timeseries/ccmpwind', options={'polygon': [[-100,-60],[100,-60],[100,60],[-100,60],[-100,-60]]}, apikey=apikey, apiroot=apiroot, verbose=True)
+    noslice_response = helpers.query('timeseries/ccmpwind', options={'id': '0.125_0.125'}, apikey=apikey, apiroot=apiroot)
+    assert slice_response[0]['data'] == noslice_response[0]['data'], 'mismatch on data recombination'
+    assert slice_response[0]['timeseries'] == noslice_response[0]['timeseries'], 'mismatch on timestamp recombination'
 
 
 

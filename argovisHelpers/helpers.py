@@ -139,7 +139,10 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
             ops['startDate'] = times[i]
             ops['endDate'] = times[i+1]
             increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
-            results += increment[0]
+            if isTimeseries:
+                results = combined_dicts(results, increment[0])
+            else:
+                results += increment[0]
             delay = increment[1]
             time.sleep(increment[1]*0.8) # assume the synchronous request is supplying at least some of delay
         return results
