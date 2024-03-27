@@ -160,6 +160,8 @@ def test_timeseries_recombo(apiroot, apikey):
 
     slice_response = helpers.query('/timeseries/ccmpwind', options={'polygon': [[-100,-60],[100,-60],[100,60],[-100,60],[-100,-60]]}, apikey=apikey, apiroot=apiroot, verbose=True)
     noslice_response = helpers.query('/timeseries/ccmpwind', options={'id': '0.125_0.125'}, apikey=apikey, apiroot=apiroot)
+    print(slice_response)
+    print(noslice_response)
     assert slice_response[0]['data'] == noslice_response[0]['data'], 'mismatch on data recombination'
     assert slice_response[0]['timeseries'] == noslice_response[0]['timeseries'], 'mismatch on timestamp recombination'
 
