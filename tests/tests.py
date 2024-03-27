@@ -158,8 +158,8 @@ def test_timeseries_recombo(apiroot, apikey):
     make sure a timeseries request that gets forcibly sliced is recombined correctly
     '''
 
-    slice_response = helpers.query('/timeseries/ccmpwind', options={'startTime':'1995-01-01T00:00:00Z', 'endTime':'2019-01-01T00:00:00Z', 'polygon': [[-10,-10],[10,-10],[10,10],[-10,10],[-10,-10]], 'data':'all'}, apikey=apikey, apiroot=apiroot, verbose=True)
-    noslice_response = helpers.query('/timeseries/ccmpwind', options={'startTime':'1995-01-01T00:00:00Z', 'endTime':'2019-01-01T00:00:00Z', 'id': '0.125_0.125', 'data':'all'}, apikey=apikey, apiroot=apiroot)
+    slice_response = helpers.query('/timeseries/ccmpwind', options={'startDate':'1995-01-01T00:00:00Z', 'endDate':'2019-01-01T00:00:00Z', 'polygon': [[-10,-10],[10,-10],[10,10],[-10,10],[-10,-10]], 'data':'all'}, apikey=apikey, apiroot=apiroot, verbose=True)
+    noslice_response = helpers.query('/timeseries/ccmpwind', options={'startDate':'1995-01-01T00:00:00Z', 'endDate':'2019-01-01T00:00:00Z', 'id': '0.125_0.125', 'data':'all'}, apikey=apikey, apiroot=apiroot)
     print(slice_response)
     print(noslice_response)
     assert slice_response[0]['data'] == noslice_response[0]['data'], 'mismatch on data recombination'
