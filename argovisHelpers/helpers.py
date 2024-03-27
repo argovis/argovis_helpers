@@ -86,7 +86,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'grids/glodap': parsetime("0001-01-02T00:00:00.000Z"),
         'timeseries/noaasst': parsetime("2023-01-30T00:00:00.000Z"),
         'timeseries/copernicussla': parsetime("2022-08-01T00:00:00.000Z"),
-        'timeseries/ccmpwind': parsetime("1993-12-31T00:00:00Z")
+        'timeseries/ccmpwind': parsetime("2019-12-30T00:00:00Z")
     }
 
     if r in data_routes:
