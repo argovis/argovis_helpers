@@ -92,6 +92,9 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
     if r in data_routes:
         # these are potentially large requests that might need to be sliced up
 
+        ## identify timeseries, need to be recombined differently after slicing
+        isTimeseries = r.split('/')[0] == 'timeseries'
+
         ## if a data query carries a scoped parameter, no need to slice up:
         if r in scoped_parameters and not set(scoped_parameters[r]).isdisjoint(options.keys()):
             return argofetch(route, options=options, apikey=apikey, apiroot=apiroot, verbose=verbose)[0]
@@ -193,4 +196,36 @@ def units_inflate(data_doc, metadata_doc=None):
     return {data_info[0][i]: data_info[2][i][uindex] for i in range(len(data_info[0]))}
 
 
+def combine_data_lists(lists):
+    # given a list of data lists, concat them appropriately;
+    # ie [[1,2],[3,4]] + [[5,6],[7,8]] = [[1,2,5,6], [3,4,7,8]]
+
+    combined_list = []
+    for sublists in zip(*lists):
+        combined_sublist = []
+        for sublist in sublists:
+            combined_sublist.extend(sublist)
+        combined_list.append(combined_sublist)
+    return combined_list
+
+def combine_dicts(list1, list2):
+    # given two lists of timeseries data objects,
+    # combine them matching on geolocation and level
+
+    combined_list = []
+    for dict1 in list1:
+        combined = False
+        for dict2 in list2:
+            if dict1.get('geolocation') == dict2.get('geolocation') and dict1.get('level') == dict2.get('level'):
+                combined_dict = dict1.copy()
+                combined_dict['timeseries'] += dict2.get('timeseries', [])
+                combined_dict['data'] = combine_data_lists([dict1.get('data', []), dict2.get('data', [])])
+                combined_list.append(combined_dict)
+                combined = True
+                list2.remove(dict2)  # Remove combined element from list2
+                break
+        if not combined:
+            combined_list.append(dict1)
+    combined_list.extend(list2)  # Append remaining elements from list2
+    return combined_list
 

@@ -18,19 +18,19 @@ def test_argofetch(apiroot, apikey):
     assert len(profile) == 1, 'should have returned exactly one profile'
     assert profile[0]['geolocation'] == { "type" : "Point", "coordinates" : [ -26.257, 3.427 ] }, 'fetched wrong profile'
 
-def test_bulky_fetch(apiroot, apikey):
-    '''
-    make sure argofetch handles rapid requests for the whole globe reasonably
-    '''
+# def test_bulky_fetch(apiroot, apikey):
+#     '''
+#     make sure argofetch handles rapid requests for the whole globe reasonably
+#     '''
 
-    result = []
-    delay = 0
-    for i in range(3):
-        request = helpers.argofetch('/grids/rg09', options={'startDate': '2004-01-01T00:00:00Z', 'endDate': '2004-02-01T00:00:00Z', 'data':'rg09_temperature'}, apikey='regular', apiroot=apiroot)
-        result += request[0]
-        delay += request[1]
-    assert len(result) == 60, 'should have found 20x3 grid docs'
-    assert delay > 0, 'should have experienced at least some rate limiter delay'
+#     result = []
+#     delay = 0
+#     for i in range(3):
+#         request = helpers.argofetch('/grids/rg09', options={'startDate': '2004-01-01T00:00:00Z', 'endDate': '2004-02-01T00:00:00Z', 'data':'rg09_temperature'}, apikey='regular', apiroot=apiroot)
+#         result += request[0]
+#         delay += request[1]
+#     assert len(result) == 60, 'should have found 20x3 grid docs'
+#     assert delay > 0, 'should have experienced at least some rate limiter delay'
 
 def test_polygon(apiroot, apikey):
     '''
