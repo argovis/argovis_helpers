@@ -41,15 +41,15 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
     r = re.sub('^/', '', route)
     r = re.sub('/$', '', r)
 
-    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'argotrajectories', 'easyocean', 'grids/rg09', 'grids/kg21', 'grids/glodap' 'timeseries/noaasst', 'timeseries/copernicussla', 'timeseries/ccmpwind']
+    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'argotrajectories', 'easyocean', 'grids/rg09', 'grids/kg21', 'grids/glodap', 'timeseries/noaasst', 'timeseries/copernicussla', 'timeseries/ccmpwind']
     
     scoped_parameters = {
-        'argo': ['id','platform'],
-        'cchdo': ['id', 'woceline', 'cchdo_cruise'],
-        'drifters': ['id', 'wmo', 'platform'],
-        'tc': ['id', 'name'],
-        'argotrajectories': ['id', 'platform'],
-        'easyocean': ['id', 'woceline'],
+        'argo': ['id','platform', 'metadata'],
+        'cchdo': ['id', 'woceline', 'cchdo_cruise', 'metadata'],
+        'drifters': ['id', 'wmo', 'platform', 'metadata'],
+        'tc': ['id', 'name', 'metadata'],
+        'argotrajectories': ['id', 'platform', 'metadata'],
+        'easyocean': ['id', 'woceline', 'metadata'],
         'grids/rg09': ['id'],
         'grids/kg21': ['id'],
         'grids/glodap': ['id'],
