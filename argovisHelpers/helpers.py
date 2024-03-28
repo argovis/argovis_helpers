@@ -102,14 +102,18 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         ## slice up in time bins:
         start = None
         end = None
+        coerced_time = 0
         if 'startDate' in options:
             start = parsetime(options['startDate'])
         else:
             start = earliest_records[r]
+            coerced_time += 1
         if 'endDate' in options:
             end = parsetime(options['endDate'])
         else:
             end = last_records[r]
+            coerced_time += 1
+        coerced_time = coerced_time == 2 # ie both timestamps have been coerced on by the helpers
 
         ### determine appropriate bin size
         maxbulk = 1000000 # should be <= maxbulk used in generating an API 413
@@ -140,11 +144,14 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
             ops['endDate'] = times[i+1]
             increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
             if isTimeseries and len(increment) > 0:
-                results = combine_dicts(results, increment[0])
+                results = combine_dicts(results, increment[0], coerced_time)
             else:
                 results += increment[0]
             delay = increment[1]
             time.sleep(increment[1]*0.8) # assume the synchronous request is supplying at least some of delay
+        if isTimeseries and coerced_time:
+            # remove timeseries from data document, only there because the slicing forced it so
+            results = [{k: v for k, v in d.items() if k != 'timeseries'} for d in results]
         return results
 
     else:
@@ -222,7 +229,9 @@ def combine_dicts(list1, list2):
             if dict1.get('geolocation') == dict2.get('geolocation') and dict1.get('level') == dict2.get('level'):
                 combined_dict = dict1.copy()
                 combined_dict['timeseries'] += dict2.get('timeseries', [])
-                combined_dict['data'] = combine_data_lists([dict1.get('data', []), dict2.get('data', [])])
+                data = combine_data_lists([dict1.get('data', []), dict2.get('data', [])])
+                if len(data) > 0:
+                    combined_dict['data'] = data
                 combined_list.append(combined_dict)
                 combined = True
                 list2.remove(dict2)  # Remove combined element from list2
