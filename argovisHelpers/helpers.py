@@ -86,11 +86,14 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'grids/glodap': parsetime("0001-01-02T00:00:00.000Z"),
         'timeseries/noaasst': parsetime("2023-01-30T00:00:00.000Z"),
         'timeseries/copernicussla': parsetime("2022-08-01T00:00:00.000Z"),
-        'timeseries/ccmpwind': parsetime("1993-12-31T00:00:00Z")
+        'timeseries/ccmpwind': parsetime("2019-12-30T00:00:00Z")
     }
 
     if r in data_routes:
         # these are potentially large requests that might need to be sliced up
+
+        ## identify timeseries, need to be recombined differently after slicing
+        isTimeseries = r.split('/')[0] == 'timeseries'
 
         ## if a data query carries a scoped parameter, no need to slice up:
         if r in scoped_parameters and not set(scoped_parameters[r]).isdisjoint(options.keys()):
@@ -99,14 +102,18 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         ## slice up in time bins:
         start = None
         end = None
+        coerced_time = 0
         if 'startDate' in options:
             start = parsetime(options['startDate'])
         else:
             start = earliest_records[r]
+            coerced_time += 1
         if 'endDate' in options:
             end = parsetime(options['endDate'])
         else:
             end = last_records[r]
+            coerced_time += 1
+        coerced_time = coerced_time == 2 # ie both timestamps have been coerced on by the helpers
 
         ### determine appropriate bin size
         maxbulk = 1000000 # should be <= maxbulk used in generating an API 413
@@ -136,9 +143,15 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
             ops['startDate'] = times[i]
             ops['endDate'] = times[i+1]
             increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
-            results += increment[0]
+            if isTimeseries and len(increment) > 0:
+                results = combine_dicts(results, increment[0])
+            else:
+                results += increment[0]
             delay = increment[1]
             time.sleep(increment[1]*0.8) # assume the synchronous request is supplying at least some of delay
+        if isTimeseries and coerced_time:
+            # remove timeseries from data document, only there because the slicing forced it so
+            results = [{k: v for k, v in d.items() if k != 'timeseries'} for d in results]
         return results
 
     else:
@@ -193,4 +206,38 @@ def units_inflate(data_doc, metadata_doc=None):
     return {data_info[0][i]: data_info[2][i][uindex] for i in range(len(data_info[0]))}
 
 
+def combine_data_lists(lists):
+    # given a list of data lists, concat them appropriately;
+    # ie [[1,2],[3,4]] + [[5,6],[7,8]] = [[1,2,5,6], [3,4,7,8]]
+
+    combined_list = []
+    for sublists in zip(*lists):
+        combined_sublist = []
+        for sublist in sublists:
+            combined_sublist.extend(sublist)
+        combined_list.append(combined_sublist)
+    return combined_list
+
+def combine_dicts(list1, list2):
+    # given two lists of timeseries data objects,
+    # combine them matching on geolocation and level
+
+    combined_list = []
+    for dict1 in list1:
+        combined = False
+        for dict2 in list2:
+            if dict1.get('geolocation') == dict2.get('geolocation') and dict1.get('level') == dict2.get('level'):
+                combined_dict = dict1.copy()
+                combined_dict['timeseries'] += dict2.get('timeseries', [])
+                data = combine_data_lists([dict1.get('data', []), dict2.get('data', [])])
+                if len(data) > 0:
+                    combined_dict['data'] = data
+                combined_list.append(combined_dict)
+                combined = True
+                list2.remove(dict2)  # Remove combined element from list2
+                break
+        if not combined:
+            combined_list.append(dict1)
+    combined_list.extend(list2)  # Append remaining elements from list2
+    return combined_list
 
