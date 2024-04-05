@@ -1,4 +1,4 @@
-import requests, datetime, copy, time, re, area, math
+import requests, datetime, copy, time, re, area, math, urllib
 
 # networking helpers
 
@@ -14,7 +14,7 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
     dl = requests.get(apiroot + route, params = options, headers={'x-argokey': apikey})
     statuscode = dl.status_code
     if verbose:
-        print(dl.url)
+        print(urllib.parse.unquote(dl.url))
     dl = dl.json()
 
     if statuscode==429:
@@ -193,7 +193,12 @@ def parsetime(time):
             time = time.replace('Z', '.000Z')
         return datetime.datetime.strptime(time, "%Y-%m-%dT%H:%M:%S.%fZ")
     elif type(time) is datetime.datetime:
-        return time.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        t = time.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        tokens = t.split('-')
+        if len(tokens[0]) < 4:
+            tokens[0] = ('000' + tokens[0])[-4:]
+            t = '-'.join(tokens)
+        return t
     else:
         raise ValueError(time)
 
