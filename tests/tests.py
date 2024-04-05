@@ -84,6 +84,16 @@ def test_parsetime(apiroot, apikey):
     assert helpers.parsetime(datestring) == dtime, 'date string should have been converted to datetime.datetime'
     assert helpers.parsetime(helpers.parsetime(datestring)) == datestring, 'parsetime should be its own inverse'
 
+def test_parsetime(apiroot, apikey):
+    '''
+    check small-year behavior of parsetime
+    '''
+
+    datestring = '0001-12-31T23:59:59.999999Z'
+    dtime = datetime.datetime(1, 12, 31, 23, 59, 59, 999999)
+
+    assert helpers.parsetime(datestring) == dtime, 'date string should have been converted to datetime.datetime'
+    assert helpers.parsetime(helpers.parsetime(datestring)) == datestring, 'parsetime should be its own inverse'
 
 def test_query(apiroot, apikey):
     '''
