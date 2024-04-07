@@ -11,7 +11,7 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
         if option in options:
             options[option] = str(options[option])
 
-    dl = requests.get(apiroot + route, params = options, headers={'x-argokey': apikey})
+    dl = requests.get(apiroot.rstrip('/')+ '/' + route.lstrip('/'), params = options, headers={'x-argokey': apikey})
     statuscode = dl.status_code
     if verbose:
         print(dl.url)

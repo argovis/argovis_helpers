@@ -18,6 +18,11 @@ def test_argofetch(apiroot, apikey):
     assert len(profile) == 1, 'should have returned exactly one profile'
     assert profile[0]['geolocation'] == { "type" : "Point", "coordinates" : [ -26.257, 3.427 ] }, 'fetched wrong profile'
 
+    profile = helpers.argofetch('argo', options={'id': '13857_068'}, apikey=apikey, apiroot=apiroot)[0]
+    assert len(profile) == 1, 'leading / on route shouldnt affect results'
+    profile = helpers.argofetch('/argo', options={'id': '13857_068'}, apikey=apikey, apiroot=apiroot+'/')[0]
+    assert len(profile) == 1, 'extra slashes betwen apiroot and route shouldnt matter'
+
 def test_bulky_fetch(apiroot, apikey):
     '''
     make sure argofetch handles rapid requests for the whole globe reasonably
