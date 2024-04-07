@@ -29,11 +29,11 @@ def test_argofetch_404(apiroot, apikey):
     '''
 
     # typoed route should give an error
-    profile = helpers.argofetch('/agro', options={startDate:'2022-02-01T00:00:00Z', endDate:'2022-02-02T00:00:00Z'}, apikey=apikey, apiroot=apiroot)[0]
+    profile = helpers.argofetch('/agro', options={'startDate':'2022-02-01T00:00:00Z', 'endDate':'2022-02-02T00:00:00Z'}, apikey=apikey, apiroot=apiroot)[0]
     assert profile['message'] == 'not found'
 
     # valid search with no results should give an empty list
-    profile = helpers.argofetch('/argo', options={startDate:'2072-02-01T00:00:00Z', endDate:'2072-02-02T00:00:00Z'}, apikey=apikey, apiroot=apiroot)[0]
+    profile = helpers.argofetch('/argo', options={'startDate':'2072-02-01T00:00:00Z', 'endDate':'2072-02-02T00:00:00Z'}, apikey=apikey, apiroot=apiroot)[0]
     assert profile == []
 
 def test_bulky_fetch(apiroot, apikey):
