@@ -18,6 +18,24 @@ def test_argofetch(apiroot, apikey):
     assert len(profile) == 1, 'should have returned exactly one profile'
     assert profile[0]['geolocation'] == { "type" : "Point", "coordinates" : [ -26.257, 3.427 ] }, 'fetched wrong profile'
 
+    profile = helpers.argofetch('argo', options={'id': '13857_068'}, apikey=apikey, apiroot=apiroot)[0]
+    assert len(profile) == 1, 'leading / on route shouldnt affect results'
+    profile = helpers.argofetch('/argo', options={'id': '13857_068'}, apikey=apikey, apiroot=apiroot+'/')[0]
+    assert len(profile) == 1, 'extra slashes betwen apiroot and route shouldnt matter'
+
+def test_argofetch_404(apiroot, apikey):
+    '''
+    check various flavors of 404
+    '''
+
+    # typoed route should give an error
+    profile = helpers.argofetch('/agro', options={'startDate':'2022-02-01T00:00:00Z', 'endDate':'2022-02-02T00:00:00Z'}, apikey=apikey, apiroot=apiroot)[0]
+    assert profile['message'] == 'not found'
+
+    # valid search with no results should give an empty list
+    profile = helpers.argofetch('/argo', options={'startDate':'2072-02-01T00:00:00Z', 'endDate':'2072-02-02T00:00:00Z'}, apikey=apikey, apiroot=apiroot)[0]
+    assert profile == []
+
 def test_bulky_fetch(apiroot, apikey):
     '''
     make sure argofetch handles rapid requests for the whole globe reasonably
