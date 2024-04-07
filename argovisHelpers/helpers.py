@@ -11,7 +11,7 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
         if option in options:
             options[option] = str(options[option])
 
-    dl = requests.get(apiroot.rstrip('/')+ '/' + route.lstrip('/'), params = options, headers={'x-argokey': apikey})
+    dl = requests.get(apiroot.rstrip('/') + '/' + route.lstrip('/'), params = options, headers={'x-argokey': apikey})
     statuscode = dl.status_code
     if verbose:
         print(urllib.parse.unquote(dl.url))
@@ -31,8 +31,7 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
             print("Argovis' servers experienced an error. Please try your request again, and email argovis@colorado.edu if this keeps happening; please include the full details of the the request you made so we can help address.")
         raise Exception(statuscode)
 
-    if (statuscode==404) or (type(dl[0]) is dict and 'code' in dl[0] and dl[0]['code']==404):
-        return [], suggestedLatency
+    # no special action for 404 - a 404 due to a mangled route will return an error, while a valid search with no result will return [].
 
     return dl, suggestedLatency
 
