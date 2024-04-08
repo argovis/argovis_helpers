@@ -66,7 +66,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'easyocean': parsetime("1983-10-08T00:00:00.000Z"),
         'grids/rg09': parsetime("2004-01-14T00:00:00.000Z"),
         'grids/kg21': parsetime("2005-01-14T00:00:00.000Z"),
-        'grids/glodap': parsetime("0001-01-01T00:00:00.000Z"),
+        'grids/glodap': parsetime("1000-01-01T00:00:00.000Z"),
         'timeseries/noaasst': parsetime("1989-12-30T00:00:00.000Z"),
         'timeseries/copernicussla': parsetime("1993-01-02T00:00:00Z"),
         'timeseries/ccmpwind': parsetime("1993-01-02T00:00:00Z")
@@ -82,7 +82,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'easyocean': parsetime("2022-10-17T00:00:00.000Z"),
         'grids/rg09': parsetime("2022-05-16T00:00:00.000Z"),
         'grids/kg21': parsetime("2020-12-16T00:00:00.000Z"),
-        'grids/glodap': parsetime("0001-01-02T00:00:00.000Z"),
+        'grids/glodap': parsetime("1000-01-02T00:00:00.000Z"),
         'timeseries/noaasst': parsetime("2023-01-30T00:00:00.000Z"),
         'timeseries/copernicussla': parsetime("2022-08-01T00:00:00.000Z"),
         'timeseries/ccmpwind': parsetime("2019-12-30T00:00:00Z")
