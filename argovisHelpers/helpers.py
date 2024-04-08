@@ -40,7 +40,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
     r = re.sub('^/', '', route)
     r = re.sub('/$', '', r)
 
-    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'argotrajectories', 'easyocean', 'grids/rg09', 'grids/kg21', 'grids/glodap', 'timeseries/noaasst', 'timeseries/copernicussla', 'timeseries/ccmpwind']
+    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'argotrajectories', 'easyocean', 'grids/rg09', 'grids/kg21', 'grids/glodap', 'timeseries/noaasst', 'timeseries/copernicussla', 'timeseries/ccmpwind', 'extended/ar']
     
     scoped_parameters = {
         'argo': ['id','platform', 'metadata'],
@@ -54,7 +54,8 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'grids/glodap': ['id'],
         'timeseries/noaasst': ['id'],
         'timeseries/copernicussla': ['id'],
-        'timeseries/ccmpwind': ['id']
+        'timeseries/ccmpwind': ['id'],
+        'extended/ar': ['id']
     }
     
     earliest_records = {
@@ -66,10 +67,11 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'easyocean': parsetime("1983-10-08T00:00:00.000Z"),
         'grids/rg09': parsetime("2004-01-14T00:00:00.000Z"),
         'grids/kg21': parsetime("2005-01-14T00:00:00.000Z"),
-        'grids/glodap': parsetime("0001-01-01T00:00:00.000Z"),
+        'grids/glodap': parsetime("1000-01-01T00:00:00.000Z"),
         'timeseries/noaasst': parsetime("1989-12-30T00:00:00.000Z"),
         'timeseries/copernicussla': parsetime("1993-01-02T00:00:00Z"),
-        'timeseries/ccmpwind': parsetime("1993-01-02T00:00:00Z")
+        'timeseries/ccmpwind': parsetime("1993-01-02T00:00:00Z"),
+        'extended/ar': parsetime("2000-01-01T00:00:00Z")
     }
 
     # plus a day vs the API, just to make sure we don't artificially cut off 
@@ -82,10 +84,11 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'easyocean': parsetime("2022-10-17T00:00:00.000Z"),
         'grids/rg09': parsetime("2022-05-16T00:00:00.000Z"),
         'grids/kg21': parsetime("2020-12-16T00:00:00.000Z"),
-        'grids/glodap': parsetime("0001-01-02T00:00:00.000Z"),
+        'grids/glodap': parsetime("1000-01-02T00:00:00.000Z"),
         'timeseries/noaasst': parsetime("2023-01-30T00:00:00.000Z"),
         'timeseries/copernicussla': parsetime("2022-08-01T00:00:00.000Z"),
-        'timeseries/ccmpwind': parsetime("2019-12-30T00:00:00Z")
+        'timeseries/ccmpwind': parsetime("2019-12-30T00:00:00Z"),
+        'extended/ar': parsetime("2022-01-01T21:00:00Z")
     }
 
     if r in data_routes:
