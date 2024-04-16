@@ -18,6 +18,24 @@ def test_argofetch(apiroot, apikey):
     assert len(profile) == 1, 'should have returned exactly one profile'
     assert profile[0]['geolocation'] == { "type" : "Point", "coordinates" : [ -26.257, 3.427 ] }, 'fetched wrong profile'
 
+    profile = helpers.argofetch('argo', options={'id': '13857_068'}, apikey=apikey, apiroot=apiroot)[0]
+    assert len(profile) == 1, 'leading / on route shouldnt affect results'
+    profile = helpers.argofetch('/argo', options={'id': '13857_068'}, apikey=apikey, apiroot=apiroot+'/')[0]
+    assert len(profile) == 1, 'extra slashes betwen apiroot and route shouldnt matter'
+
+def test_argofetch_404(apiroot, apikey):
+    '''
+    check various flavors of 404
+    '''
+
+    # typoed route should give an error
+    profile = helpers.argofetch('/agro', options={'startDate':'2022-02-01T00:00:00Z', 'endDate':'2022-02-02T00:00:00Z'}, apikey=apikey, apiroot=apiroot)[0]
+    assert profile['message'] == 'not found'
+
+    # valid search with no results should give an empty list
+    profile = helpers.argofetch('/argo', options={'startDate':'2072-02-01T00:00:00Z', 'endDate':'2072-02-02T00:00:00Z'}, apikey=apikey, apiroot=apiroot)[0]
+    assert profile == []
+
 def test_bulky_fetch(apiroot, apikey):
     '''
     make sure argofetch handles rapid requests for the whole globe reasonably
@@ -84,6 +102,16 @@ def test_parsetime(apiroot, apikey):
     assert helpers.parsetime(datestring) == dtime, 'date string should have been converted to datetime.datetime'
     assert helpers.parsetime(helpers.parsetime(datestring)) == datestring, 'parsetime should be its own inverse'
 
+def test_parsetime(apiroot, apikey):
+    '''
+    check small-year behavior of parsetime
+    '''
+
+    datestring = '0001-12-31T23:59:59.999999Z'
+    dtime = datetime.datetime(1, 12, 31, 23, 59, 59, 999999)
+
+    assert helpers.parsetime(datestring) == dtime, 'date string should have been converted to datetime.datetime'
+    assert helpers.parsetime(helpers.parsetime(datestring)) == datestring, 'parsetime should be its own inverse'
 
 def test_query(apiroot, apikey):
     '''
@@ -120,3 +148,57 @@ def test_units_inflate(apiroot, apikey):
     units = helpers.units_inflate(data) 
 
     assert units == {'a': 'dbar', 'b': 'kelvin', 'c': 'psu'}, f'failed to reconstruct units dict, got {units}'
+
+def test_combine_data_lists(apiroot, apikey):
+    '''
+    check basic behavior of combine_data_lists
+    '''
+
+    a = [[1,2],[3,4]]
+    b = [[5,6],[7,8]]
+    c = [[10,11],[12,13]]
+    assert helpers.combine_data_lists([a]) == [[1,2],[3,4]], 'failed to combine a single data list'
+    assert helpers.combine_data_lists([a,b]) == [[1,2,5,6],[3,4,7,8]], 'failed to combine two data lists'
+    assert helpers.combine_data_lists([a,b,c]) == [[1,2,5,6,10,11],[3,4,7,8,12,13]], 'failed to combine three data lists'
+
+def test_combine_dicts(apiroot, apikey):
+    '''
+    check basic behavior of combine_dics
+    '''
+
+    x = {'geolocation':{'type': 'Point', 'coordinates':[0,0]}, 'level':0, 'timeseries':[0,1,2], 'data': [[1,2,3],[4,5,6]]}
+    y = {'geolocation':{'type': 'Point', 'coordinates':[10,10]}, 'level':1, 'timeseries':[0,1,2], 'data': [[10,20,30],[40,50,60]]}
+    z = {'geolocation':{'type': 'Point', 'coordinates':[20,20]}, 'level':2, 'timeseries':[0,1,2], 'data': [[100,200,300],[400,500,600]]}
+
+    X = {'geolocation':{'type': 'Point', 'coordinates':[0,0]}, 'level':0, 'timeseries':[3,4,5], 'data': [[11,21,31],[41,51,61]]}
+    Y = {'geolocation':{'type': 'Point', 'coordinates':[10,10]}, 'level':1, 'timeseries':[3,4,5], 'data': [[101,201,301],[401,501,601]]}
+    Z = {'geolocation':{'type': 'Point', 'coordinates':[20,20]}, 'level':2.1, 'timeseries':[3,4,5], 'data': [[1001,2001,3001],[4001,5001,6001]]}
+
+    assert helpers.combine_dicts([x,y,z], [X,Z,Y]) == [
+        {'geolocation':{'type': 'Point', 'coordinates':[0,0]}, 'level':0, 'timeseries':[0,1,2,3,4,5], 'data': [[1,2,3,11,21,31],[4,5,6,41,51,61]]},
+        {'geolocation':{'type': 'Point', 'coordinates':[10,10]}, 'level':1, 'timeseries':[0,1,2,3,4,5], 'data': [[10,20,30,101,201,301],[40,50,60,401,501,601]]},
+        {'geolocation':{'type': 'Point', 'coordinates':[20,20]}, 'level':2, 'timeseries':[0,1,2], 'data': [[100,200,300],[400,500,600]]},
+        {'geolocation':{'type': 'Point', 'coordinates':[20,20]}, 'level':2.1, 'timeseries':[3,4,5], 'data': [[1001,2001,3001],[4001,5001,6001]]}
+    ], 'failed to combine timeseries fragments correctly'
+
+def test_timeseries_recombo(apiroot, apikey):
+    '''
+    make sure a timeseries request that gets forcibly sliced is recombined correctly
+    '''
+
+    slice_response = helpers.query('/timeseries/ccmpwind', options={'startDate':'1995-01-01T00:00:00Z', 'endDate':'2019-01-01T00:00:00Z', 'polygon': [[-10,-10],[10,-10],[10,10],[-10,10],[-10,-10]], 'data':'all'}, apikey=apikey, apiroot=apiroot)
+    noslice_response = helpers.query('/timeseries/ccmpwind', options={'startDate':'1995-01-01T00:00:00Z', 'endDate':'2019-01-01T00:00:00Z', 'id': '0.125_0.125', 'data':'all'}, apikey=apikey, apiroot=apiroot)
+    assert slice_response[0]['data'] == noslice_response[0]['data'], 'mismatch on data recombination'
+    assert slice_response[0]['timeseries'] == noslice_response[0]['timeseries'], 'mismatch on timestamp recombination'
+
+def test_timeseries_recombo_edges(apiroot, apikey):
+    '''
+    check some edgecases of timeseries recombo
+    '''
+
+    response = helpers.query('/timeseries/ccmpwind', options={'startDate':'1995-01-01T00:00:00Z', 'endDate':'2019-01-01T00:00:00Z', 'polygon': [[-10,-10],[10,-10],[10,10],[-10,10],[-10,-10]]}, apikey=apikey, apiroot=apiroot)
+    assert 'data' not in response[0], 'make sure timeseries recombination doesnt coerce a data key onto a document that shouldnt have one'
+    response = helpers.query('/timeseries/ccmpwind', options={'polygon': [[-10,-10],[10,-10],[10,10],[-10,10],[-10,-10]]}, apikey=apikey, apiroot=apiroot)
+    assert 'timeseries' not in response[0], 'make sure timeseries recombination doesnt coerce a timeseries key onto a document that shouldnt have one'
+
+
