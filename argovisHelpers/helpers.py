@@ -1,4 +1,7 @@
-import requests, datetime, copy, time, re, area, math
+import requests, datetime, copy, time, re, area, math, urllib
+from shapely.geometry import shape, box
+import geopandas as gpd
+import json
 
 # networking helpers
 
@@ -11,10 +14,10 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
         if option in options:
             options[option] = str(options[option])
 
-    dl = requests.get(apiroot + route, params = options, headers={'x-argokey': apikey})
+    dl = requests.get(apiroot.rstrip('/') + '/' + route.lstrip('/'), params = options, headers={'x-argokey': apikey})
     statuscode = dl.status_code
     if verbose:
-        print(dl.url)
+        print(urllib.parse.unquote(dl.url))
     dl = dl.json()
 
     if statuscode==429:
@@ -29,10 +32,9 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
             print('The temporospatial extent of your request is enormous! Consider using the `query` helper in this package to split it up into more manageable chunks.')
         elif statuscode >= 500 or (statuscode==200 and type(dl) is dict and 'code' in dl):
             print("Argovis' servers experienced an error. Please try your request again, and email argovis@colorado.edu if this keeps happening; please include the full details of the the request you made so we can help address.")
-        raise Exception(statuscode)
+        raise Exception(statuscode, dl)
 
-    if (statuscode==404) or (type(dl[0]) is dict and 'code' in dl[0] and dl[0]['code']==404):
-        return [], suggestedLatency
+    # no special action for 404 - a 404 due to a mangled route will return an error, while a valid search with no result will return [].
 
     return dl, suggestedLatency
 
@@ -41,7 +43,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
     r = re.sub('^/', '', route)
     r = re.sub('/$', '', r)
 
-    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'argotrajectories', 'easyocean', 'grids/rg09', 'grids/kg21', 'grids/glodap', 'timeseries/noaasst', 'timeseries/copernicussla', 'timeseries/ccmpwind']
+    data_routes = ['argo', 'cchdo', 'drifters', 'tc', 'argotrajectories', 'easyocean', 'grids/rg09', 'grids/kg21', 'grids/glodap', 'timeseries/noaasst', 'timeseries/copernicussla', 'timeseries/ccmpwind', 'extended/ar']
     
     scoped_parameters = {
         'argo': ['id','platform', 'metadata'],
@@ -55,7 +57,8 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'grids/glodap': ['id'],
         'timeseries/noaasst': ['id'],
         'timeseries/copernicussla': ['id'],
-        'timeseries/ccmpwind': ['id']
+        'timeseries/ccmpwind': ['id'],
+        'extended/ar': ['id']
     }
     
     earliest_records = {
@@ -67,10 +70,11 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'easyocean': parsetime("1983-10-08T00:00:00.000Z"),
         'grids/rg09': parsetime("2004-01-14T00:00:00.000Z"),
         'grids/kg21': parsetime("2005-01-14T00:00:00.000Z"),
-        'grids/glodap': parsetime("0001-01-01T00:00:00.000Z"),
+        'grids/glodap': parsetime("1000-01-01T00:00:00.000Z"),
         'timeseries/noaasst': parsetime("1989-12-30T00:00:00.000Z"),
         'timeseries/copernicussla': parsetime("1993-01-02T00:00:00Z"),
-        'timeseries/ccmpwind': parsetime("1993-01-02T00:00:00Z")
+        'timeseries/ccmpwind': parsetime("1993-01-02T00:00:00Z"),
+        'extended/ar': parsetime("2000-01-01T00:00:00Z")
     }
 
     # plus a day vs the API, just to make sure we don't artificially cut off 
@@ -83,63 +87,83 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'easyocean': parsetime("2022-10-17T00:00:00.000Z"),
         'grids/rg09': parsetime("2022-05-16T00:00:00.000Z"),
         'grids/kg21': parsetime("2020-12-16T00:00:00.000Z"),
-        'grids/glodap': parsetime("0001-01-02T00:00:00.000Z"),
+        'grids/glodap': parsetime("1000-01-02T00:00:00.000Z"),
         'timeseries/noaasst': parsetime("2023-01-30T00:00:00.000Z"),
         'timeseries/copernicussla': parsetime("2022-08-01T00:00:00.000Z"),
-        'timeseries/ccmpwind': parsetime("1993-12-31T00:00:00Z")
+        'timeseries/ccmpwind': parsetime("2019-12-30T00:00:00Z"),
+        'extended/ar': parsetime("2022-01-01T21:00:00Z")
     }
 
     if r in data_routes:
         # these are potentially large requests that might need to be sliced up
 
+        ## identify timeseries, need to be recombined differently after slicing
+        isTimeseries = r.split('/')[0] == 'timeseries'
+
         ## if a data query carries a scoped parameter, no need to slice up:
         if r in scoped_parameters and not set(scoped_parameters[r]).isdisjoint(options.keys()):
             return argofetch(route, options=options, apikey=apikey, apiroot=apiroot, verbose=verbose)[0]
 
-        ## slice up in time bins:
-        start = None
-        end = None
-        if 'startDate' in options:
-            start = parsetime(options['startDate'])
+        if isTimeseries:
+            ## slice up in space bins - could do this for all in future, we'll see how it goes.
+            if 'polygon' not in options: # need to deal with boxes too
+                print('Please specify a polygon region for this search.')
+            pgons = split_polygon(options['polygon'], 5, 5)
+            ops = copy.deepcopy(options)
+            results = []
+            delay = 0
+            for i in range(len(pgons)):
+                ops['polygon'] = pgons[i]
+                increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
+                results += increment[0]
+                delay = increment[1]
+                time.sleep(increment[1]*0.8) # assume the synchronous request is supplying at least some of delay
+            return results
         else:
-            start = earliest_records[r]
-        if 'endDate' in options:
-            end = parsetime(options['endDate'])
-        else:
-            end = last_records[r]
+            ## slice up in time bins:
+            start = None
+            end = None
+            if 'startDate' in options:
+                start = parsetime(options['startDate'])
+            else:
+                start = earliest_records[r]
+            if 'endDate' in options:
+                end = parsetime(options['endDate'])
+            else:
+                end = last_records[r]
 
-        ### determine appropriate bin size
-        maxbulk = 1000000 # should be <= maxbulk used in generating an API 413
-        timestep = 30 # days
+            ### determine appropriate bin size
+            maxbulk = 1000000 # should be <= maxbulk used in generating an API 413
+            timestep = 30 # days
 
-        if 'polygon' in options:
-            extent = area.area({'type':'Polygon','coordinates':[ options['polygon'] ]}) / 13000 / 1000000 # poly area in units of 13000 sq. km. blocks
-            timestep = min(400, math.floor(maxbulk / extent))
-        elif 'multipolygon' in options:
-            extents = [area.area({'type':'Polygon','coordinates':[x]}) / 13000 / 1000000 for x in options['multipolygon']]
-            extent = min(extents)
-            timestep = min(400,math.floor(maxbulk / extent))
-        elif 'box' in options:
-            extent = area.area({'type':'Polygon','coordinates':[[ options['box'][0], [options['box'][1][0], options['box'][0][0]], options['box'][1], [options['box'][0][0], options['box'][1][0]], options['box'][0]]]}) / 13000 / 1000000
-            timestep = min(400, math.floor(maxbulk / extent))
+            if 'polygon' in options:
+                extent = area.area({'type':'Polygon','coordinates':[ options['polygon'] ]}) / 13000 / 1000000 # poly area in units of 13000 sq. km. blocks
+                timestep = min(400, math.floor(maxbulk / extent))
+            elif 'multipolygon' in options:
+                extents = [area.area({'type':'Polygon','coordinates':[x]}) / 13000 / 1000000 for x in options['multipolygon']]
+                extent = min(extents)
+                timestep = min(400,math.floor(maxbulk / extent))
+            elif 'box' in options:
+                extent = area.area({'type':'Polygon','coordinates':[[ options['box'][0], [options['box'][1][0], options['box'][0][0]], options['box'][1], [options['box'][0][0], options['box'][1][0]], options['box'][0]]]}) / 13000 / 1000000
+                timestep = min(400, math.floor(maxbulk / extent))
 
-        delta = datetime.timedelta(days=timestep)
-        times = [start]
-        while times[-1] + delta < end:
-            times.append(times[-1]+delta)
-        times.append(end)
-        times = [parsetime(x) for x in times]
-        results = []
-        ops = copy.deepcopy(options)
-        delay = 0
-        for i in range(len(times)-1):
-            ops['startDate'] = times[i]
-            ops['endDate'] = times[i+1]
-            increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
-            results += increment[0]
-            delay = increment[1]
-            time.sleep(increment[1]*0.8) # assume the synchronous request is supplying at least some of delay
-        return results
+            delta = datetime.timedelta(days=timestep)
+            times = [start]
+            while times[-1] + delta < end:
+                times.append(times[-1]+delta)
+            times.append(end)
+            times = [parsetime(x) for x in times]
+            results = []
+            ops = copy.deepcopy(options)
+            delay = 0
+            for i in range(len(times)-1):
+                ops['startDate'] = times[i]
+                ops['endDate'] = times[i+1]
+                increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
+                results += increment[0]
+                delay = increment[1]
+                time.sleep(increment[1]*0.8) # assume the synchronous request is supplying at least some of delay
+            return results
 
     else:
         return argofetch(route, options=options, apikey=apikey, apiroot=apiroot, verbose=verbose)[0]
@@ -180,7 +204,12 @@ def parsetime(time):
             time = time.replace('Z', '.000Z')
         return datetime.datetime.strptime(time, "%Y-%m-%dT%H:%M:%S.%fZ")
     elif type(time) is datetime.datetime:
-        return time.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        t = time.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        tokens = t.split('-')
+        if len(tokens[0]) < 4:
+            tokens[0] = ('000' + tokens[0])[-4:]
+            t = '-'.join(tokens)
+        return t
     else:
         raise ValueError(time)
 
@@ -193,4 +222,47 @@ def units_inflate(data_doc, metadata_doc=None):
     return {data_info[0][i]: data_info[2][i][uindex] for i in range(len(data_info[0]))}
 
 
+def combine_data_lists(lists):
+    # given a list of data lists, concat them appropriately;
+    # ie [[1,2],[3,4]] + [[5,6],[7,8]] = [[1,2,5,6], [3,4,7,8]]
 
+    combined_list = []
+    for sublists in zip(*lists):
+        combined_sublist = []
+        for sublist in sublists:
+            combined_sublist.extend(sublist)
+        combined_list.append(combined_sublist)
+    return combined_list
+
+def split_polygon(geojson_polygon, max_lon_size, max_lat_size):
+    # slice a geojson polygon up into a list of smaller polygons of maximum extent in lon and lat
+
+    polygon = shape({"type": "Polygon", "coordinates": [geojson_polygon]})
+
+    # Get the bounds of the polygon
+    min_lon, min_lat, max_lon, max_lat = polygon.bounds
+
+    # Create a list to hold the smaller polygons
+    smaller_polygons = []
+
+    # Split the polygon into smaller polygons
+    lon = min_lon
+    lat = min_lat
+    while lon <= max_lon:
+        while lat <= max_lat:
+            # Create a bounding box for the current chunk
+            bounding_box = box(lon, lat, lon + max_lon_size, lat + max_lat_size)
+
+            # Intersect the bounding box with the original polygon
+            chunk = polygon.intersection(bounding_box)
+
+            # If the intersection is not empty, add it to the list of smaller polygons
+            if not chunk.is_empty:
+                # Convert the Shapely geometry to a GeoJSON polygon and add it to the list
+                smaller_polygons.append(json.loads(gpd.GeoSeries([chunk]).to_json()))
+
+            lat += max_lat_size
+        lat = min_lat
+        lon += max_lon_size
+
+    return [x['features'][0]['geometry']['coordinates'][0] for x in smaller_polygons]
