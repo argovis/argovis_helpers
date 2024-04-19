@@ -174,6 +174,7 @@ def slice_timesteps(options, r):
 
     maxbulk = 2000000 # should be <= maxbulk used in generating an API 413
     timestep = 30 # days
+    extent = 360000000 / 13000 #// 360M sq km, all the oceans
     
     if 'polygon' in options:
         extent = area.area({'type':'Polygon','coordinates':[ options['polygon'] ]}) / 13000 / 1000000 # poly area in units of 13000 sq. km. blocks
