@@ -1,7 +1,6 @@
-import requests, datetime, copy, time, re, area, math, urllib
+import requests, datetime, copy, time, re, area, math, urllib, json
 from shapely.geometry import shape, box
 import geopandas as gpd
-import json
 
 # networking helpers
 
@@ -73,7 +72,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
 
         # should we slice by time or space?
         times = slice_timesteps(options, r)
-        nspace = 999999
+        n_space = 999999
         if 'polygon' in options:
             pgons = split_polygon(options['polygon'], 5, 5)
             n_space = len(pgons)
