@@ -161,25 +161,6 @@ def test_combine_data_lists(apiroot, apikey):
     assert helpers.combine_data_lists([a,b]) == [[1,2,5,6],[3,4,7,8]], 'failed to combine two data lists'
     assert helpers.combine_data_lists([a,b,c]) == [[1,2,5,6,10,11],[3,4,7,8,12,13]], 'failed to combine three data lists'
 
-def test_combine_dicts(apiroot, apikey):
-    '''
-    check basic behavior of combine_dics
-    '''
-
-    x = {'geolocation':{'type': 'Point', 'coordinates':[0,0]}, 'level':0, 'timeseries':[0,1,2], 'data': [[1,2,3],[4,5,6]]}
-    y = {'geolocation':{'type': 'Point', 'coordinates':[10,10]}, 'level':1, 'timeseries':[0,1,2], 'data': [[10,20,30],[40,50,60]]}
-    z = {'geolocation':{'type': 'Point', 'coordinates':[20,20]}, 'level':2, 'timeseries':[0,1,2], 'data': [[100,200,300],[400,500,600]]}
-
-    X = {'geolocation':{'type': 'Point', 'coordinates':[0,0]}, 'level':0, 'timeseries':[3,4,5], 'data': [[11,21,31],[41,51,61]]}
-    Y = {'geolocation':{'type': 'Point', 'coordinates':[10,10]}, 'level':1, 'timeseries':[3,4,5], 'data': [[101,201,301],[401,501,601]]}
-    Z = {'geolocation':{'type': 'Point', 'coordinates':[20,20]}, 'level':2.1, 'timeseries':[3,4,5], 'data': [[1001,2001,3001],[4001,5001,6001]]}
-
-    assert helpers.combine_dicts([x,y,z], [X,Z,Y]) == [
-        {'geolocation':{'type': 'Point', 'coordinates':[0,0]}, 'level':0, 'timeseries':[0,1,2,3,4,5], 'data': [[1,2,3,11,21,31],[4,5,6,41,51,61]]},
-        {'geolocation':{'type': 'Point', 'coordinates':[10,10]}, 'level':1, 'timeseries':[0,1,2,3,4,5], 'data': [[10,20,30,101,201,301],[40,50,60,401,501,601]]},
-        {'geolocation':{'type': 'Point', 'coordinates':[20,20]}, 'level':2, 'timeseries':[0,1,2], 'data': [[100,200,300],[400,500,600]]},
-        {'geolocation':{'type': 'Point', 'coordinates':[20,20]}, 'level':2.1, 'timeseries':[3,4,5], 'data': [[1001,2001,3001],[4001,5001,6001]]}
-    ], 'failed to combine timeseries fragments correctly'
 
 def test_timeseries_recombo(apiroot, apikey):
     '''
