@@ -86,7 +86,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
             results = []
             delay = 0
             if 'polygon' in options:
-                #pgons = split_polygon(options['polygon'], 5, 5)
+                pgons = split_polygon(options['polygon'], 5, 5)
                 for i in range(len(pgons)):
                     ops['polygon'] = pgons[i]
                     increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
@@ -105,8 +105,8 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
             # do it for boxes too just to make sure nothing funny happened on the boundaries
             ops = copy.deepcopy(options)
             ops['compression'] = 'minimal'
-            true_ids = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)[0]
-            true_ids = [x[0] for x in true_ids]
+            true_ids = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
+            true_ids = [x[0] for x in true_ids[0]]
             fetched_ids = [x['_id'] for x in results]
             if len(fetched_ids) != len(list(set(fetched_ids))):
                 # deduplicate anything scooped up by multiple cells, like on cell borders
