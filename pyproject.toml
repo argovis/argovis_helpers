@@ -16,7 +16,9 @@ classifiers = [
 ]
 dependencies = [
     "requests",
-    "area"
+    "area",
+    "shapely",
+    "geopandas"
 ]
 requires-python = ">=3.9"
 

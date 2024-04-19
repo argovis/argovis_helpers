@@ -8,7 +8,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    container: argovis/argovis_helpers:test-base-231026
+    container: argovis/argovis_helpers:test-base-240418
 
     services:
       database:
