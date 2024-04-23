@@ -16,7 +16,7 @@ jobs:
       redis:
         image: redis:7.0.2
       api:
-        image: argovis/api:2.24.1
+        image: argovis/api:2.24.3
         env:
           ARGONODE: core
 

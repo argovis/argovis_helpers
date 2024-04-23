@@ -59,6 +59,10 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'timeseries/ccmpwind': ['id'],
         'extended/ar': ['id']
     }
+    
+    winding = False
+    if 'winding' in options:
+        winding = options['winding'] == 'true'
 
     if r in data_routes and (not 'compression' in options or options['compression']!='minimal'):
         # these are potentially large requests that might need to be sliced up
@@ -74,10 +78,10 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         times = slice_timesteps(options, r)
         n_space = 999999
         if 'polygon' in options:
-            pgons = split_polygon(options['polygon'], 5, 5)
+            pgons = split_polygon(options['polygon'])
             n_space = len(pgons)
         elif 'box' in options:
-            boxes = split_box(options['box'], 5, 5)
+            boxes = split_box(options['box'])
             n_space = len(boxes)
         
         if isTimeseries or n_space < len(times):
@@ -86,7 +90,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
             results = []
             delay = 0
             if 'polygon' in options:
-                pgons = split_polygon(options['polygon'], 5, 5)
+                pgons = split_polygon(options['polygon'])
                 for i in range(len(pgons)):
                     ops['polygon'] = pgons[i]
                     increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
@@ -94,7 +98,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
                     delay = increment[1]
                     time.sleep(increment[1]*0.8) # assume the synchronous request is supplying at least some of delay
             elif 'box' in options:
-                boxes = split_box(options['box'], 5, 5)
+                boxes = split_box(options['box'])
                 for i in range(len(boxes)):
                     ops['box'] = boxes[i]
                     increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
@@ -273,10 +277,15 @@ def combine_data_lists(lists):
         combined_list.append(combined_sublist)
     return combined_list
 
-def split_polygon(geojson_polygon, max_lon_size, max_lat_size):
+def split_polygon(coords, max_lon_size=5, max_lat_size=5, winding=False):
     # slice a geojson polygon up into a list of smaller polygons of maximum extent in lon and lat
 
-    polygon = shape({"type": "Polygon", "coordinates": [geojson_polygon]})
+    # if a polygon bridges the dateline and wraps its longitudes around, 
+    # we need to detect this and un-wrap.
+    # assume bounded region is the smaller region unless winding is being enforced, per mongo 
+    coords = dont_wrap_dateline(coords)
+        
+    polygon = shape({"type": "Polygon", "coordinates": [coords]})
 
     # Get the bounds of the polygon
     min_lon, min_lat, max_lon, max_lat = polygon.bounds
@@ -306,8 +315,12 @@ def split_polygon(geojson_polygon, max_lon_size, max_lat_size):
 
     return [x['features'][0]['geometry']['coordinates'][0] for x in smaller_polygons]
 
-def split_box(box, max_lon_size, max_lat_size):
+def split_box(box, max_lon_size=5, max_lat_size=5):
     # slice a box up into a list of smaller boxes of maximum extent in lon and lat
+    
+    if box[0][0] > box[1][0]:
+        # unwrap the dateline
+        box[1][0] += 360
     
     smaller_boxes = []
     lon = box[0][0]
@@ -320,3 +333,12 @@ def split_box(box, max_lon_size, max_lat_size):
         lon += max_lon_size
         
     return smaller_boxes
+
+def dont_wrap_dateline(coords):
+    # given a list of polygon coords, return them ensuring they dont modulo 360 over the dateline.
+    
+    for i in range(len(coords)-1):
+        if coords[i][0]*coords[i+1][0] < 0 and abs(coords[i][0] - coords[i+1][0]) > 180:
+            return [[lon + 360 if lon < 0 else lon, lat] for lon, lat in coords]
+    
+    return coords

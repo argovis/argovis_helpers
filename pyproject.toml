@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "argovisHelpers"
-version = "0.0.22"
+version = "0.0.23-rc2"
 description = "Helper functions to consume and parse information from University of Colorado's Argovis API."
 readme = "README.md"
 authors = [{name = "Katie Mills" }]
@@ -17,8 +17,8 @@ classifiers = [
 dependencies = [
     "requests",
     "area",
-    "shapely",
-    "geopandas"
+    "shapely==1.8.0",
+    "geopandas==0.14.3"
 ]
 requires-python = ">=3.9"
 
