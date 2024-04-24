@@ -161,25 +161,6 @@ def test_combine_data_lists(apiroot, apikey):
     assert helpers.combine_data_lists([a,b]) == [[1,2,5,6],[3,4,7,8]], 'failed to combine two data lists'
     assert helpers.combine_data_lists([a,b,c]) == [[1,2,5,6,10,11],[3,4,7,8,12,13]], 'failed to combine three data lists'
 
-def test_combine_dicts(apiroot, apikey):
-    '''
-    check basic behavior of combine_dics
-    '''
-
-    x = {'geolocation':{'type': 'Point', 'coordinates':[0,0]}, 'level':0, 'timeseries':[0,1,2], 'data': [[1,2,3],[4,5,6]]}
-    y = {'geolocation':{'type': 'Point', 'coordinates':[10,10]}, 'level':1, 'timeseries':[0,1,2], 'data': [[10,20,30],[40,50,60]]}
-    z = {'geolocation':{'type': 'Point', 'coordinates':[20,20]}, 'level':2, 'timeseries':[0,1,2], 'data': [[100,200,300],[400,500,600]]}
-
-    X = {'geolocation':{'type': 'Point', 'coordinates':[0,0]}, 'level':0, 'timeseries':[3,4,5], 'data': [[11,21,31],[41,51,61]]}
-    Y = {'geolocation':{'type': 'Point', 'coordinates':[10,10]}, 'level':1, 'timeseries':[3,4,5], 'data': [[101,201,301],[401,501,601]]}
-    Z = {'geolocation':{'type': 'Point', 'coordinates':[20,20]}, 'level':2.1, 'timeseries':[3,4,5], 'data': [[1001,2001,3001],[4001,5001,6001]]}
-
-    assert helpers.combine_dicts([x,y,z], [X,Z,Y]) == [
-        {'geolocation':{'type': 'Point', 'coordinates':[0,0]}, 'level':0, 'timeseries':[0,1,2,3,4,5], 'data': [[1,2,3,11,21,31],[4,5,6,41,51,61]]},
-        {'geolocation':{'type': 'Point', 'coordinates':[10,10]}, 'level':1, 'timeseries':[0,1,2,3,4,5], 'data': [[10,20,30,101,201,301],[40,50,60,401,501,601]]},
-        {'geolocation':{'type': 'Point', 'coordinates':[20,20]}, 'level':2, 'timeseries':[0,1,2], 'data': [[100,200,300],[400,500,600]]},
-        {'geolocation':{'type': 'Point', 'coordinates':[20,20]}, 'level':2.1, 'timeseries':[3,4,5], 'data': [[1001,2001,3001],[4001,5001,6001]]}
-    ], 'failed to combine timeseries fragments correctly'
 
 def test_timeseries_recombo(apiroot, apikey):
     '''
@@ -188,6 +169,7 @@ def test_timeseries_recombo(apiroot, apikey):
 
     slice_response = helpers.query('/timeseries/ccmpwind', options={'startDate':'1995-01-01T00:00:00Z', 'endDate':'2019-01-01T00:00:00Z', 'polygon': [[-10,-10],[10,-10],[10,10],[-10,10],[-10,-10]], 'data':'all'}, apikey=apikey, apiroot=apiroot)
     noslice_response = helpers.query('/timeseries/ccmpwind', options={'startDate':'1995-01-01T00:00:00Z', 'endDate':'2019-01-01T00:00:00Z', 'id': '0.125_0.125', 'data':'all'}, apikey=apikey, apiroot=apiroot)
+
     assert slice_response[0]['data'] == noslice_response[0]['data'], 'mismatch on data recombination'
     assert slice_response[0]['timeseries'] == noslice_response[0]['timeseries'], 'mismatch on timestamp recombination'
 
@@ -200,5 +182,34 @@ def test_timeseries_recombo_edges(apiroot, apikey):
     assert 'data' not in response[0], 'make sure timeseries recombination doesnt coerce a data key onto a document that shouldnt have one'
     response = helpers.query('/timeseries/ccmpwind', options={'polygon': [[-10,-10],[10,-10],[10,10],[-10,10],[-10,-10]]}, apikey=apikey, apiroot=apiroot)
     assert 'timeseries' not in response[0], 'make sure timeseries recombination doesnt coerce a timeseries key onto a document that shouldnt have one'
+
+
+def test_is_cw(apiroot, apikey):
+    '''
+    check basic behavior of cw checker
+    '''
+
+    assert helpers.is_cw([[0,0],[0,10],[10,10],[10,0],[0,0]]), 'basic CW example failed'
+    assert not helpers.is_cw([[0,0],[10,0],[10,10],[0,10],[0,0]]), 'basic CCW example failed'
+    assert helpers.is_cw([[175,0],[175,10],[-175,10],[-175,0],[175,0]]), 'CW wrapping dateline example failed'
+    assert helpers.is_cw([[175,0],[175,10],[185,10],[185,0],[175,0]]), 'CW example crossing dateline failed'
+
+def test_generate_global_cells(apiroot, apikey):
+    '''
+    check basic behavor of generate_global_cells
+    '''
+
+    assert len(helpers.generate_global_cells()) == 2592, 'global 5x5 grid generated wrong number of cells'
+    assert helpers.generate_global_cells()[0] == [[-180,-90],[-175,-90],[-175,-85],[-180,-85],[-180,-90]], 'first cell of globabl 5x5 grid generated incorrectly'
+
+def test_dont_wrap_dateline(apiroot, apikey):
+    '''
+    check basic behavior of dont_wrap_dateline
+    '''
+
+    assert helpers.dont_wrap_dateline([[-175,0],[-175,10],[175,10],[175,0],[-175,0]]) == [[185,0],[185,10],[175,10],[175,0],[185,0]], 'basic dateline unwrap failed'
+    assert helpers.dont_wrap_dateline([[-175,0],[175,0],[175,10],[-175,10],[-175,0]]) == [[185,0],[175,0],[175,10],[185,10],[185,0]], 'unwrap cw'
+    assert helpers.dont_wrap_dateline([[5,0],[-5,0],[-5,5],[5,5],[5,0]]) == [[5,0],[-5,0],[-5,5],[5,5],[5,0]], 'unwrap shoudnt affect meridian crossing'
+
 
 

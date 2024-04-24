@@ -8,15 +8,15 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    container: argovis/argovis_helpers:test-base-231026
+    container: argovis/argovis_helpers:test-base-240418
 
     services:
       database:
-        image: argovis/testdb:0.40
+        image: argovis/testdb:0.41
       redis:
         image: redis:7.0.2
       api:
-        image: argovis/api:2.22.0
+        image: argovis/api:2.24.3
         env:
           ARGONODE: core
 
