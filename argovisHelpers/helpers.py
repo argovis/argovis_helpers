@@ -76,31 +76,36 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
 
         # should we slice by time or space?
         times = slice_timesteps(options, r)
-        n_space = 999999
+        n_space = 2592 # number of 5x5 bins covering a globe 
         if 'polygon' in options:
-            pgons = split_polygon(options['polygon'])
+            pgons = split_polygon(options['polygon'], winding=winding)
             n_space = len(pgons)
         elif 'box' in options:
             boxes = split_box(options['box'])
             n_space = len(boxes)
         
         if isTimeseries or n_space < len(times):
-            ## slice up in space bins - could do this for all in future, we'll see how it goes.
+            ## slice up in space bins
             ops = copy.deepcopy(options)
             results = []
             delay = 0
-            if 'polygon' in options:
-                pgons = split_polygon(options['polygon'])
-                for i in range(len(pgons)):
-                    ops['polygon'] = pgons[i]
+
+            if 'box' in options:
+                boxes = split_box(options['box'])
+                for i in range(len(boxes)):
+                    ops['box'] = boxes[i]
                     increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
                     results += increment[0]
                     delay = increment[1]
                     time.sleep(increment[1]*0.8) # assume the synchronous request is supplying at least some of delay
-            elif 'box' in options:
-                boxes = split_box(options['box'])
-                for i in range(len(boxes)):
-                    ops['box'] = boxes[i]
+            else:
+                pgons = []
+                if 'polygon' in options:
+                    pgons = split_polygon(options['polygon'], winding=winding)
+                else:
+                    pgons = generate_global_cells()
+                for i in range(len(pgons)):
+                    ops['polygon'] = pgons[i]
                     increment = argofetch(route, options=ops, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
                     results += increment[0]
                     delay = increment[1]
@@ -125,6 +130,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
             results = [x for x in results if x['_id'] not in to_drop]
             return results
         else:
+            ## slice up in time bins
             results = []
             ops = copy.deepcopy(options)
             delay = 0
@@ -339,6 +345,20 @@ def dont_wrap_dateline(coords):
     
     for i in range(len(coords)-1):
         if coords[i][0]*coords[i+1][0] < 0 and abs(coords[i][0] - coords[i+1][0]) > 180:
+            # ie if any geodesic edge crosses the dateline with a modulo, we must need to remap.
             return [[lon + 360 if lon < 0 else lon, lat] for lon, lat in coords]
     
     return coords
+
+def generate_global_cells(lonstep=5, latstep=5):
+    cells = []
+    lon = -180
+    lat = -90
+    while lon < 180:
+        while lat < 90:
+            cells.append([[lon,lat],[lon+lonstep,lat],[lon+lonstep,lat+latstep],[lon,lat+latstep],[lon,lat]])
+
+            lat += latstep
+        lat = -90
+        lon += lonstep
+    return cells
