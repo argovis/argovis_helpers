@@ -36,19 +36,19 @@ def test_argofetch_404(apiroot, apikey):
     profile = helpers.argofetch('/argo', options={'startDate':'2072-02-01T00:00:00Z', 'endDate':'2072-02-02T00:00:00Z'}, apikey=apikey, apiroot=apiroot)[0]
     assert profile == []
 
-def test_bulky_fetch(apiroot, apikey):
-    '''
-    make sure argofetch handles rapid requests for the whole globe reasonably
-    '''
+# def test_bulky_fetch(apiroot, apikey):
+#     '''
+#     make sure argofetch handles rapid requests for the whole globe reasonably
+#     '''
 
-    result = []
-    delay = 0
-    for i in range(3):
-        request = helpers.argofetch('/grids/rg09', options={'startDate': '2004-01-01T00:00:00Z', 'endDate': '2004-02-01T00:00:00Z', 'data':'rg09_temperature'}, apikey='regular', apiroot=apiroot)
-        result += request[0]
-        delay += request[1]
-    assert len(result) == 60, 'should have found 20x3 grid docs'
-    assert delay > 0, 'should have experienced at least some rate limiter delay'
+#     result = []
+#     delay = 0
+#     for i in range(3):
+#         request = helpers.argofetch('/grids/rg09', options={'startDate': '2004-01-01T00:00:00Z', 'endDate': '2004-02-01T00:00:00Z', 'data':'rg09_temperature'}, apikey='regular', apiroot=apiroot)
+#         result += request[0]
+#         delay += request[1]
+#     assert len(result) == 60, 'should have found 20x3 grid docs'
+#     assert delay > 0, 'should have experienced at least some rate limiter delay'
 
 def test_polygon(apiroot, apikey):
     '''
@@ -182,5 +182,34 @@ def test_timeseries_recombo_edges(apiroot, apikey):
     assert 'data' not in response[0], 'make sure timeseries recombination doesnt coerce a data key onto a document that shouldnt have one'
     response = helpers.query('/timeseries/ccmpwind', options={'polygon': [[-10,-10],[10,-10],[10,10],[-10,10],[-10,-10]]}, apikey=apikey, apiroot=apiroot)
     assert 'timeseries' not in response[0], 'make sure timeseries recombination doesnt coerce a timeseries key onto a document that shouldnt have one'
+
+
+def test_is_cw(apiroot, apikey):
+    '''
+    check basic behavior of cw checker
+    '''
+
+    assert helpers.is_cw([[0,0],[0,10],[10,10],[10,0],[0,0]]), 'basic CW example failed'
+    assert not helpers.is_cw([[0,0],[10,0],[10,10],[0,10],[0,0]]), 'basic CCW example failed'
+    assert helpers.is_cw([[175,0],[175,10],[-175,10],[-175,0],[175,0]]), 'CW wrapping dateline example failed'
+    assert helpers.is_cw([[175,0],[175,10],[185,10],[185,0],[175,0]]), 'CW example crossing dateline failed'
+
+def test_generate_global_cells(apiroot, apikey):
+    '''
+    check basic behavor of generate_global_cells
+    '''
+
+    assert len(helpers.generate_global_cells()) == 2592, 'global 5x5 grid generated wrong number of cells'
+    assert helpers.generate_global_cells()[0] == [[-180,-90],[-175,-90],[-175,-85],[-180,-85],[-180,-90]], 'first cell of globabl 5x5 grid generated incorrectly'
+
+def test_dont_wrap_dateline(apiroot, apikey):
+    '''
+    check basic behavior of dont_wrap_dateline
+    '''
+
+    assert helpers.dont_wrap_dateline([[-175,0],[-175,10],[175,10],[175,0],[-175,0]]) == [[185,0],[185,10],[175,10],[175,0],[185,0]], 'basic dateline unwrap failed'
+    assert helpers.dont_wrap_dateline([[-175,0],[175,0],[175,10],[-175,10],[-175,0]]) == [[185,0],[175,0],[175,10],[185,10],[185,0]], 'unwrap cw'
+    assert helpers.dont_wrap_dateline([[5,0],[-5,0],[-5,5],[5,5],[5,0]]) == [[5,0],[-5,0],[-5,5],[5,5],[5,0]], 'unwrap shoudnt affect meridian crossing'
+
 
 

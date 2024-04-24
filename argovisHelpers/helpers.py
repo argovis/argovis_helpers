@@ -1,5 +1,6 @@
 import requests, datetime, copy, time, re, area, math, urllib, json
-from shapely.geometry import shape, box
+from shapely.geometry import shape, box, Polygon
+from shapely.ops import orient
 import geopandas as gpd
 
 # networking helpers
@@ -293,33 +294,60 @@ def split_polygon(coords, max_lon_size=5, max_lat_size=5, winding=False):
         
     polygon = shape({"type": "Polygon", "coordinates": [coords]})
 
-    # Get the bounds of the polygon
-    min_lon, min_lat, max_lon, max_lat = polygon.bounds
-
-    # Create a list to hold the smaller polygons
     smaller_polygons = []
 
-    # Split the polygon into smaller polygons
-    lon = min_lon
-    lat = min_lat
-    while lon < max_lon:
-        while lat < max_lat:
-            # Create a bounding box for the current chunk
-            bounding_box = box(lon, lat, lon + max_lon_size, lat + max_lat_size)
+    min_lon, min_lat, max_lon, max_lat = polygon.bounds
+    
+    if winding and is_cw(coords):
+        # if winding is being enforced and the polygon is cw wound, 
+        # we're looking for everything outside the polygon.
+        
+        lon = min_lon-10
+        lat = -90
+        while lon < min_lon + 360:
+            while lat < max_lat+10: # < 90:
+                bounding_box = box(lon, lat, lon + max_lon_size, lat + max_lat_size)
+                chunk = bounding_box.difference(polygon)
+                if not chunk.is_empty:
+                    # Convert the Shapely geometry to a GeoJSON polygon and add it to the list
+                    shapes = json.loads(gpd.GeoSeries([chunk]).to_json())
+                    if shapes['features'][0]['geometry']['type'] == 'Polygon':
+                        smaller_polygons.append(shapes['features'][0]['geometry']['coordinates'][0])
+                    elif shapes['features'][0]['geometry']['type'] == 'MultiPolygon':
+                        for poly in shapes['features'][0]['geometry']['coordinates']:
+                            smaller_polygons.append(poly[0])
 
-            # Intersect the bounding box with the original polygon
-            chunk = polygon.intersection(bounding_box)
-
-            # If the intersection is not empty, add it to the list of smaller polygons
-            if not chunk.is_empty:
-                # Convert the Shapely geometry to a GeoJSON polygon and add it to the list
-                smaller_polygons.append(json.loads(gpd.GeoSeries([chunk]).to_json()))
-
-            lat += max_lat_size
+                lat += max_lat_size
+            lat = -90
+            lon += max_lon_size
+    else:
+        # Split the polygon interior into smaller polygons
+        
+        lon = min_lon
         lat = min_lat
-        lon += max_lon_size
+        while lon < max_lon:
+            while lat < max_lat:
+                # Create a bounding box for the current chunk
+                bounding_box = box(lon, lat, lon + max_lon_size, lat + max_lat_size)
 
-    return [x['features'][0]['geometry']['coordinates'][0] for x in smaller_polygons]
+                # Intersect the bounding box with the original polygon
+                chunk = polygon.intersection(bounding_box)
+
+                # If the intersection is not empty, add it to the list of smaller polygons
+                if not chunk.is_empty:
+                    # Convert the Shapely geometry to a GeoJSON polygon and add it to the list
+                    shapes = json.loads(gpd.GeoSeries([chunk]).to_json())
+                    if shapes['features'][0]['geometry']['type'] == 'Polygon':
+                        smaller_polygons.append(shapes['features'][0]['geometry']['coordinates'][0])
+                    elif shapes['features'][0]['geometry']['type'] == 'MultiPolygon':
+                        for poly in shapes['features'][0]['geometry']['coordinates']:
+                            smaller_polygons.append(poly[0])
+
+                lat += max_lat_size
+            lat = min_lat
+            lon += max_lon_size
+
+    return smaller_polygons
 
 def split_box(box, max_lon_size=5, max_lat_size=5):
     # slice a box up into a list of smaller boxes of maximum extent in lon and lat
@@ -362,3 +390,7 @@ def generate_global_cells(lonstep=5, latstep=5):
         lat = -90
         lon += lonstep
     return cells
+
+def is_cw(coords):
+    unwrap = dont_wrap_dateline(coords)
+    return Polygon(unwrap) == orient(Polygon(unwrap), sign=-1.0)
