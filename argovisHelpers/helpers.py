@@ -195,7 +195,7 @@ def slice_timesteps(options, r):
     elif 'box' in options:
         extent = area.area({'type':'Polygon','coordinates':[[ options['box'][0], [options['box'][1][0], options['box'][0][0]], options['box'][1], [options['box'][0][0], options['box'][1][0]], options['box'][0]]]}) / 13000 / 1000000
         
-    timestep = math.floor(maxbulk / extent)
+    timestep = min(365*100,math.floor(maxbulk / extent))
 
     ## slice up in time bins:
     start = None
