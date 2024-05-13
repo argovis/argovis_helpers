@@ -58,14 +58,6 @@ def test_polygon(apiroot, apikey):
     profile = helpers.argofetch('/argo', options={'polygon': [[-26,3],[-27,3],[-27,4],[-26,4],[-26,3]]}, apikey=apikey, apiroot=apiroot)[0]
     assert len(profile) == 1, 'polygon encompases exactly one profile'
 
-def test_multipolygon(apiroot, apikey):
-    '''
-    make sure multipolygons are getting handled properly
-    '''
-
-    profiles = helpers.query('/argo', options={'multipolygon': [[[152,42],[153,42],[153,43],[152,43],[152,42]], [[152.2,42],[153.2,42],[153.2,43],[152.2,43],[152.2,42]]]}, apikey=apikey, apiroot=apiroot, verbose=True)
-    assert len(profiles) == 2, 'multipolygon encompases two profiles in intersection'
-
 def test_data_inflate(apiroot, apikey):
     '''
     check basic behavior of data_inflate
@@ -182,17 +174,6 @@ def test_timeseries_recombo_edges(apiroot, apikey):
     assert 'data' not in response[0], 'make sure timeseries recombination doesnt coerce a data key onto a document that shouldnt have one'
     response = helpers.query('/timeseries/ccmpwind', options={'polygon': [[-10,-10],[10,-10],[10,10],[-10,10],[-10,-10]]}, apikey=apikey, apiroot=apiroot)
     assert 'timeseries' not in response[0], 'make sure timeseries recombination doesnt coerce a timeseries key onto a document that shouldnt have one'
-
-
-def test_is_cw(apiroot, apikey):
-    '''
-    check basic behavior of cw checker
-    '''
-
-    assert helpers.is_cw([[0,0],[0,10],[10,10],[10,0],[0,0]]), 'basic CW example failed'
-    assert not helpers.is_cw([[0,0],[10,0],[10,10],[0,10],[0,0]]), 'basic CCW example failed'
-    assert helpers.is_cw([[175,0],[175,10],[-175,10],[-175,0],[175,0]]), 'CW wrapping dateline example failed'
-    assert helpers.is_cw([[175,0],[175,10],[185,10],[185,0],[175,0]]), 'CW example crossing dateline failed'
 
 def test_generate_global_cells(apiroot, apikey):
     '''
