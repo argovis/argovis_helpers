@@ -10,7 +10,7 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
     # raises on anything other than success or a 404.
 
     o = copy.deepcopy(options)
-    for option in ['polygon', 'multipolygon', 'box']:
+    for option in ['polygon', 'box']:
         if option in options:
             options[option] = str(options[option])
 
@@ -61,10 +61,6 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         'extended/ar': ['id']
     }
     
-    winding = False
-    if 'winding' in options:
-        winding = options['winding'] == 'true'
-
     if r in data_routes and (not 'compression' in options or options['compression']!='minimal'):
         # these are potentially large requests that might need to be sliced up
 
@@ -79,7 +75,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
         times = slice_timesteps(options, r)
         n_space = 2592 # number of 5x5 bins covering a globe 
         if 'polygon' in options:
-            pgons = split_polygon(options['polygon'], winding=winding)
+            pgons = split_polygon(options['polygon'])
             n_space = len(pgons)
         elif 'box' in options:
             boxes = split_box(options['box'])
@@ -102,7 +98,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
             else:
                 pgons = []
                 if 'polygon' in options:
-                    pgons = split_polygon(options['polygon'], winding=winding)
+                    pgons = split_polygon(options['polygon'])
                 else:
                     pgons = generate_global_cells()
                 for i in range(len(pgons)):
@@ -129,7 +125,7 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
                 p, delay = argofetch(route, options={'id': id}, apikey=apikey, apiroot=apiroot, suggestedLatency=delay, verbose=verbose)
                 results += p
             results = [x for x in results if x['_id'] not in to_drop]
-            return results
+
         else:
             ## slice up in time bins
             results = []
@@ -142,7 +138,12 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
                 results += increment[0]
                 delay = increment[1]
                 time.sleep(increment[1]*0.8) # assume the synchronous request is supplying at least some of delay
-            return results
+            
+        # slicing can end up duplicating results in batchmeta requests, deduplicate
+        if 'batchmeta' in options:
+            results = list({x['_id']: x for x in results}.values())
+
+        return results
 
     else:
         return argofetch(route, options=options, apikey=apikey, apiroot=apiroot, verbose=verbose)[0]
@@ -189,9 +190,6 @@ def slice_timesteps(options, r):
     
     if 'polygon' in options:
         extent = area.area({'type':'Polygon','coordinates':[ options['polygon'] ]}) / 13000 / 1000000 # poly area in units of 13000 sq. km. blocks
-    elif 'multipolygon' in options:
-        extents = [area.area({'type':'Polygon','coordinates':[x]}) / 13000 / 1000000 for x in options['multipolygon']]
-        extent = min(extents)
     elif 'box' in options:
         extent = area.area({'type':'Polygon','coordinates':[[ options['box'][0], [options['box'][1][0], options['box'][0][0]], options['box'][1], [options['box'][0][0], options['box'][1][0]], options['box'][0]]]}) / 13000 / 1000000
         
@@ -284,68 +282,40 @@ def combine_data_lists(lists):
         combined_list.append(combined_sublist)
     return combined_list
 
-def split_polygon(coords, max_lon_size=5, max_lat_size=5, winding=False):
+def split_polygon(coords, max_lon_size=5, max_lat_size=5):
     # slice a geojson polygon up into a list of smaller polygons of maximum extent in lon and lat
 
     # if a polygon bridges the dateline and wraps its longitudes around, 
     # we need to detect this and un-wrap.
-    # assume bounded region is the smaller region unless winding is being enforced, per mongo 
     coords = dont_wrap_dateline(coords)
         
     polygon = shape({"type": "Polygon", "coordinates": [coords]})
-
     smaller_polygons = []
-
     min_lon, min_lat, max_lon, max_lat = polygon.bounds
-    
-    if winding and is_cw(coords):
-        # if winding is being enforced and the polygon is cw wound, 
-        # we're looking for everything outside the polygon.
-        
-        lon = min_lon-10
-        lat = -90
-        while lon < min_lon + 360:
-            while lat < max_lat+10: # < 90:
-                bounding_box = box(lon, lat, lon + max_lon_size, lat + max_lat_size)
-                chunk = bounding_box.difference(polygon)
-                if not chunk.is_empty:
-                    # Convert the Shapely geometry to a GeoJSON polygon and add it to the list
-                    shapes = json.loads(gpd.GeoSeries([chunk]).to_json())
-                    if shapes['features'][0]['geometry']['type'] == 'Polygon':
-                        smaller_polygons.append(shapes['features'][0]['geometry']['coordinates'][0])
-                    elif shapes['features'][0]['geometry']['type'] == 'MultiPolygon':
-                        for poly in shapes['features'][0]['geometry']['coordinates']:
-                            smaller_polygons.append(poly[0])
 
-                lat += max_lat_size
-            lat = -90
-            lon += max_lon_size
-    else:
-        # Split the polygon interior into smaller polygons
-        
-        lon = min_lon
+    lon = min_lon
+    lat = min_lat
+    while lon < max_lon:
+        while lat < max_lat:
+            # Create a bounding box for the current chunk
+            bounding_box = box(lon, lat, lon + max_lon_size, lat + max_lat_size)
+
+            # Intersect the bounding box with the original polygon
+            chunk = polygon.intersection(bounding_box)
+
+            # If the intersection is not empty, add it to the list of smaller polygons
+            if not chunk.is_empty:
+                # Convert the Shapely geometry to a GeoJSON polygon and add it to the list
+                shapes = json.loads(gpd.GeoSeries([chunk]).to_json())
+                if shapes['features'][0]['geometry']['type'] == 'Polygon':
+                    smaller_polygons.append(shapes['features'][0]['geometry']['coordinates'][0])
+                elif shapes['features'][0]['geometry']['type'] == 'MultiPolygon':
+                    for poly in shapes['features'][0]['geometry']['coordinates']:
+                        smaller_polygons.append(poly[0])
+
+            lat += max_lat_size
         lat = min_lat
-        while lon < max_lon:
-            while lat < max_lat:
-                # Create a bounding box for the current chunk
-                bounding_box = box(lon, lat, lon + max_lon_size, lat + max_lat_size)
-
-                # Intersect the bounding box with the original polygon
-                chunk = polygon.intersection(bounding_box)
-
-                # If the intersection is not empty, add it to the list of smaller polygons
-                if not chunk.is_empty:
-                    # Convert the Shapely geometry to a GeoJSON polygon and add it to the list
-                    shapes = json.loads(gpd.GeoSeries([chunk]).to_json())
-                    if shapes['features'][0]['geometry']['type'] == 'Polygon':
-                        smaller_polygons.append(shapes['features'][0]['geometry']['coordinates'][0])
-                    elif shapes['features'][0]['geometry']['type'] == 'MultiPolygon':
-                        for poly in shapes['features'][0]['geometry']['coordinates']:
-                            smaller_polygons.append(poly[0])
-
-                lat += max_lat_size
-            lat = min_lat
-            lon += max_lon_size
+        lon += max_lon_size
 
     return smaller_polygons
 
@@ -390,7 +360,3 @@ def generate_global_cells(lonstep=5, latstep=5):
         lat = -90
         lon += lonstep
     return cells
-
-def is_cw(coords):
-    unwrap = dont_wrap_dateline(coords)
-    return Polygon(unwrap) == orient(Polygon(unwrap), sign=-1.0)
