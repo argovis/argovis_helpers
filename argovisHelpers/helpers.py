@@ -2,6 +2,7 @@ import requests, datetime, copy, time, re, area, math, urllib, json
 from shapely.geometry import shape, box, Polygon
 from shapely.ops import orient
 import geopandas as gpd
+import pkg_resources
 
 def slice_timesteps(options, r):
     # given a qsr option dict and data route, return a list of reasonable time divisions
@@ -223,7 +224,7 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
         if option in options:
             options[option] = str(options[option])
 
-    dl = requests.get(apiroot.rstrip('/') + '/' + route.lstrip('/'), params = options, headers={'x-argokey': apikey})
+    dl = requests.get(apiroot.rstrip('/') + '/' + route.lstrip('/'), params = options, headers={'x-argokey': apikey, 'x-avh-telemetry': pkg_resources.get_distribution('argovisHelpers').version})
     statuscode = dl.status_code
     if verbose:
         print(urllib.parse.unquote(dl.url))
