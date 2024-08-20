@@ -27,7 +27,7 @@ def slice_timesteps(options, r):
     # plus a day vs the API, just to make sure we don't artificially cut off 
     last_records = {
         'argo': datetime.datetime.now(),
-        'cchdo': parsetime("2023-03-10T17:48:00.000Z"),
+        'cchdo': parsetime("2024-03-28T05:31:00Z"),
         'drifters': parsetime("2020-07-01T23:00:00.000Z"),
         'tc': parsetime("2020-12-26T12:00:00.000Z"),
         'argotrajectories': parsetime("2021-01-02T01:13:26.000Z"),
