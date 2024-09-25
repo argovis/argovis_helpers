@@ -12,11 +12,11 @@ jobs:
 
     services:
       database:
-        image: argovis/testdb:0.41
+        image: argovis/testdb:0.45
       redis:
         image: redis:7.0.2
       api:
-        image: argovis/api:2.24.3
+        image: argovis/api:2.30.0
         env:
           ARGONODE: core
 
