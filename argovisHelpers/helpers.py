@@ -261,12 +261,12 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
     # start by just trying the request, to determine if we need to slice it
     if not slice:
         try:
-            q = argofetch(route, options=options, apikey=apikey, apiroot=apiroot, verbose=verbose)
+            q = argofetch(route, options=copy.deepcopy(options), apikey=apikey, apiroot=apiroot, verbose=verbose)
             return q[0]
         except Exception as e:
             if e.args[0] == 413:
                 # we need to slice
-                return query(route=route, options=options, apikey=apikey, apiroot=apiroot, verbose=verbose, slice=True)
+                return query(route=route, options=copy.deepcopy(options), apikey=apikey, apiroot=apiroot, verbose=verbose, slice=True)
             else:
                 print(e)
                 return e.args

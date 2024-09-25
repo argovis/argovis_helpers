@@ -192,5 +192,21 @@ def test_dont_wrap_dateline(apiroot, apikey):
     assert helpers.dont_wrap_dateline([[-175,0],[175,0],[175,10],[-175,10],[-175,0]]) == [[185,0],[175,0],[175,10],[185,10],[185,0]], 'unwrap cw'
     assert helpers.dont_wrap_dateline([[5,0],[-5,0],[-5,5],[5,5],[5,0]]) == [[5,0],[-5,0],[-5,5],[5,5],[5,0]], 'unwrap shoudnt affect meridian crossing'
 
+def test_big_time_slice(apiroot, apikey):
+    '''
+    check that slicing in a query with a long time range and polygon is working correctly
+    '''
 
+    natlantic = [[-52.91015625000001,57.57635026510582],[-47.4609375,58.59841337380398],[-41.13281250000001,58.96285043960036],[-36.12304687500001,58.73552560169896],[-28.828125000000004,58.781109991263875],[-24.433593750000004,58.91750479454867],[-17.929687500000004,58.82663462015099],[-12.216796875000002,58.50670551226914],[-12.392578125,41.263494202188674],[-20.126953125000004,41.06499545917395],[-28.388671875000004,41.592988409051024],[-37.44140625000001,40.865895731685946],[-45.87890625,41.78988186577712],[-52.11914062500001,41.724317678639935],[-52.91015625000001,57.57635026510582]]
+    options = {
+        'startDate': '2000-01-01T00:00:00Z',
+        'endDate': '2021-01-01T00:00:00Z',
+        'polygon': natlantic,
+        'presRange': '0,100',
+        'compression': 'minimal',
+        'data': 'doxy,1'
+    }
+    response = helpers.query('/argo', options=options, apikey='regular', apiroot=apiroot)
+    print(response)
+    assert len(response) == 0, 'query should run to completion with no result'
 
