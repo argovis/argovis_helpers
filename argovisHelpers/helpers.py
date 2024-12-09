@@ -30,7 +30,7 @@ def slice_timesteps(options, r):
         'cchdo': parsetime("2024-03-29T05:31:00Z"),
         'drifters': parsetime("2020-07-01T23:00:00.000Z"),
         'tc': parsetime("2020-12-28T12:00:00.000Z"),
-        'argotrajectories': parsetime("2021-01-02T01:13:26.000Z"),
+        'argotrajectories': parsetime("2023-01-01T00:00:00.000Z"),
         'easyocean': parsetime("2022-10-17T00:00:00.000Z"),
         'grids/rg09': parsetime("2024-10-16T00:00:00.000Z"),
         'grids/kg21': parsetime("2020-12-16T00:00:00.000Z"),
