@@ -5,41 +5,63 @@ import geopandas as gpd
 import pkg_resources
 from pkg_resources import DistributionNotFound
 
+_avhcache = {}
+_CACHE_EXPIRY = 3600
+
+def fetch_json(endpoint):
+    """
+    Fetches a JSON document from the given endpoint.
+    Returns a cached version if the last fetch was within the last hour.
+    """
+    global _avhcache
+
+    current_time = time.time()
+
+    # Check if we have a cached version and if it's still valid
+    if endpoint in _avhcache:
+        cached_time, cached_data = _avhcache[endpoint]
+        if current_time - cached_time < _CACHE_EXPIRY:
+            return cached_data  # Return cached data
+
+    # Fetch the data from the API
+    try:
+        response = requests.get(endpoint)
+        response.raise_for_status()  # Raise an exception for HTTP errors
+        json_data = response.json()
+
+        # Cache the result with the current timestamp
+        _avhcache[endpoint] = (current_time, json_data)
+        return json_data
+    except requests.RequestException as e:
+        raise RuntimeError(f"Failed to fetch data from {endpoint}: {e}")
+
+def get_timebound(dataset, bound):
+    core_rl = fetch_json("https://argovis-api.colorado.edu/summary?id=ratelimiter")
+    drifter_rl = fetch_json("https://argovis-drifters.colorado.edu/summary?id=ratelimiter")
+
+    rl = core_rl[0]['metadata'] | drifter_rl[0]['metadata']
+
+    keymap = {
+        'argo': 'argo',
+        'cchdo': 'cchdo',
+        'drifters': 'drifters',
+        'tc': 'tc',
+        'argotrajectories': 'argotrajectories',
+        'easyocean': 'easyocean',
+        'grids/rg09': 'rg09',
+        'grids/kg21': 'kg21',
+        'grids/glodap': 'glodap',
+        'timeseries/noaasst': 'noaasst',
+        'timeseries/copernicussla': 'copernicussla',
+        'timeseries/ccmpwind': 'ccmpwind',
+        'extended/ar': 'ar'
+    }
+
+    return parsetime(rl[keymap[dataset]][bound])
+
+
 def slice_timesteps(options, r):
     # given a qsr option dict and data route, return a list of reasonable time divisions
-
-    earliest_records = {
-        'argo': parsetime("1997-07-27T20:26:20.002Z"),
-        'cchdo': parsetime("1972-07-23T09:11:00.000Z"),
-        'drifters': parsetime("1987-10-01T13:00:00.000Z"),
-        'tc': parsetime("1851-06-24T00:00:00.000Z"),
-        'argotrajectories': parsetime("2001-01-03T22:46:33.000Z"),
-        'easyocean': parsetime("1983-10-08T00:00:00.000Z"),
-        'grids/rg09': parsetime("2004-01-14T00:00:00.000Z"),
-        'grids/kg21': parsetime("2005-01-14T00:00:00.000Z"),
-        'grids/glodap': parsetime("1000-01-01T00:00:00.000Z"),
-        'timeseries/noaasst': parsetime("1989-12-30T00:00:00.000Z"),
-        'timeseries/copernicussla': parsetime("1993-01-02T00:00:00Z"),
-        'timeseries/ccmpwind': parsetime("1993-01-02T00:00:00Z"),
-        'extended/ar': parsetime("2000-01-01T00:00:00Z")
-    }
-
-    # plus a day vs the API, just to make sure we don't artificially cut off 
-    last_records = {
-        'argo': datetime.datetime.now(),
-        'cchdo': parsetime("2024-03-29T05:31:00Z"),
-        'drifters': parsetime("2020-07-01T23:00:00.000Z"),
-        'tc': parsetime("2020-12-28T12:00:00.000Z"),
-        'argotrajectories': parsetime("2023-01-01T00:00:00.000Z"),
-        'easyocean': parsetime("2022-10-17T00:00:00.000Z"),
-        'grids/rg09': parsetime("2024-10-16T00:00:00.000Z"),
-        'grids/kg21': parsetime("2020-12-16T00:00:00.000Z"),
-        'grids/glodap': parsetime("1000-01-02T00:00:00.000Z"),
-        'timeseries/noaasst': parsetime("2023-01-30T00:00:00.000Z"),
-        'timeseries/copernicussla': parsetime("2022-08-01T00:00:00.000Z"),
-        'timeseries/ccmpwind': parsetime("2019-12-30T00:00:00Z"),
-        'extended/ar': parsetime("2022-01-01T21:00:00Z")
-    }
 
     maxbulk = 2000000 # should be <= maxbulk used in generating an API 413
     timestep = 30 # days
@@ -58,11 +80,11 @@ def slice_timesteps(options, r):
     if 'startDate' in options:
         start = parsetime(options['startDate'])
     else:
-        start = earliest_records[r]
+        start = get_timebound(r, 'startDate')
     if 'endDate' in options:
         end = parsetime(options['endDate'])
     else:
-        end = last_records[r]
+        end = get_timebound(r, 'endDate')
         
     delta = datetime.timedelta(days=timestep)
     times = [start]
