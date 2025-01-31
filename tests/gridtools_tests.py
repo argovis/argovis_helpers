@@ -527,10 +527,12 @@ def test_trace_shape_basic():
 	
 	correct_vertexes = [[1,1],[2,1],[3,1],[3,2],[3,3],[2,3],[1,3],[1,2],[1,1]] # should be CCW
 	vertexes = gridtools.trace_shape(labeled_map, 1)[0]
+	vertexes = [[int(x) for x in pair] for pair in vertexes]
 	assert isCircular(correct_vertexes[:-1], vertexes[:-1]) # note slice off the last polygon-closing vertex, will be arbitraily different depending on starting point
 
 	correct_vertexes = [[5,5],[6,5],[7,5],[7,6],[6,6],[6,7],[5,7],[5,6],[5,5]]
 	vertexes = gridtools.trace_shape(labeled_map, 2)[0]
+	vertexes = [[int(x) for x in pair] for pair in vertexes]
 	assert isCircular(correct_vertexes[:-1], vertexes[:-1]) 
 
 def test_trace_shape_dateline():
@@ -550,6 +552,7 @@ def test_trace_shape_dateline():
 
 	correct_vertexes = [[3,0],[3,7],[4,7],[4,0],[4,1],[3,1],[3,0]]
 	vertexes = gridtools.trace_shape(labeled_map, 1)[0]
+	vertexes = [[int(x) for x in pair] for pair in vertexes]
 	assert isCircular(correct_vertexes[:-1], vertexes[:-1])
 
 # geojson generation ------------------------------------------
