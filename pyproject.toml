@@ -4,16 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "argovisHelpers"
-version = "0.0.33"
+version = "0.0.34a1"
 description = "Helper functions to consume and parse information from University of Colorado's Argovis API."
 readme = "README.md"
 authors = [{name = "Katie Mills" }]
-license = { file = "LICENSE" }
-classifiers = [
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python",
-    "Programming Language :: Python :: 3",
-]
+license = "MIT"
 dependencies = [
     "requests",
     "area",
@@ -24,3 +19,8 @@ requires-python = ">=3.9"
 
 [project.urls]
 Homepage = "https://argovis.colorado.edu"
+
+[tool.setuptools]
+packages = [
+    "argovisHelpers"
+]
