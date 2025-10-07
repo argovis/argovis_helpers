@@ -647,7 +647,9 @@ def find_bracket(lst, low_roi, high_roi):
     return low_index, high_index
 
 def interpolate_all(profile, levels, pressure_buffer=-1, pressure_index_buffer=-1):
-    # remove any QC vectors
+    # interpolate all variables in a profile to a common set of levels
+    
+    ## remove any QC vectors
     variables = profile['data_info'][0]
     qcvecs = ['qc' in x for x in variables] # a bit duck-typie...
     data = [x for i,x in enumerate(profile['data']) if not qcvecs[i]]
@@ -668,8 +670,30 @@ def interpolate_all(profile, levels, pressure_buffer=-1, pressure_index_buffer=-
 
     return {**profile, 'data':data, 'data_info':data_info}
 
+def profile_is_empty(data, data_info):
+    # check if a profile is nothing but nan / none in every variable except pressure
 
-def query_interpolated(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', levels=None, format_dataset=False, verbose=False, pressure_buffer=-1, pressure_index_buffer=-1):
+    for i in range(len(data)):
+        if data_info[0][i] != 'pressure' and any([v is not None and (type(v) is not float or not math.isnan(v)) for v in data[i]]):
+            return False
+
+    return True
+
+def query_interpolated(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', levels=None, format_dataset=False, verbose=False, pressure_buffer=-1, pressure_index_buffer=-1, suppress_no_interps=True, audit_all=False):
+    # fetch profiles from Argovis and interpolate all variables to a common set of levels.
+    # returns either a list of profile objects with interpolated data, or an xarray.Dataset dimensioned by profile index and levels, in analogy to Argo GDAC files.
+
+    # route [string]: any argovis route
+    # options [dict]: dict of corresponding query options
+    # apikey [string]: your argovis apikey
+    # apiroot [string]: the root url of the argovis api
+    # levels [float list]: list of levels to interpolate to; if None, use Roemmich-Gilson levels
+    # format_dataset [bool]: return an xarray.Dataset dimensioned by profile index and levels, in analogy to Argo GDAC files; otherwise return the usual argovis profile objects
+    # verbose [bool]: print out each individual request made to Argovis
+    # pressure_buffer [float]: dbar of extra pressure range to include on either side of the ROI for interpolation; if -1, don't use a buffer
+    # pressure_index_buffer [int]: minimum number of extra points to include in the buffer on either side of the ROI for interpolation; if -1, don't use a buffer
+    # suppress_no_interps [bool]: drop profiles that are nothing but NaN in every variable except pressure after interpolation
+    # audit_all [bool]: return a tuple of (interpolated_profiles, raw_profiles) for auditing purposes
 
     ## request validation
     if 'data' not in options:
@@ -681,10 +705,18 @@ def query_interpolated(route, options={}, apikey='', apiroot='https://argovis-ap
 
     ## fetch raw data from Argovis
     rawdata = query(route, options=options, apikey=apikey, apiroot=apiroot, verbose=verbose)
-
     interpolated_profiles = [interpolate_all(x, levels, pressure_buffer, pressure_index_buffer) for x in rawdata]
     
-    if not format_dataset:
+    ## intended for sanity checking
+    if audit_all:
+        return interpolated_profiles, rawdata
+
+    ## dump profiles that are nothing but None / NaN in every variable except pressure
+    if suppress_no_interps:
+        interpolated_profiles = [x for x in interpolated_profiles if not profile_is_empty(x['data'], x['data_info'])]
+
+    ## return standard profile object
+    if not format_dataset:            
         return interpolated_profiles
 
     # munge into an xarray dataset dimensioned by a profile index and levels, in analogy to Argo GDAC files
