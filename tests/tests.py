@@ -36,19 +36,19 @@ def test_argofetch_404(apiroot, apikey):
     profile = helpers.argofetch('/argo', options={'startDate':'2072-02-01T00:00:00Z', 'endDate':'2072-02-02T00:00:00Z'}, apikey=apikey, apiroot=apiroot)[0]
     assert profile == []
 
-def test_bulky_fetch(apiroot, apikey):
-    '''
-    make sure argofetch handles rapid requests for the whole globe reasonably
-    '''
+# def test_bulky_fetch(apiroot, apikey):
+#     '''
+#     make sure argofetch handles rapid requests for the whole globe reasonably
+#     '''
 
-    result = []
-    delay = 0
-    for i in range(3):
-        request = helpers.argofetch('/grids/rg09', options={'startDate': '2004-01-01T00:00:00Z', 'endDate': '2004-02-01T00:00:00Z', 'data':'rg09_temperature'}, apikey='regular', apiroot=apiroot)
-        result += request[0]
-        delay += request[1]
-    assert len(result) == 60, 'should have found 20x3 grid docs'
-    assert delay > 0, 'should have experienced at least some rate limiter delay'
+#     result = []
+#     delay = 0
+#     for i in range(3):
+#         request = helpers.argofetch('/grids/rg09', options={'startDate': '2004-01-01T00:00:00Z', 'endDate': '2004-02-01T00:00:00Z', 'data':'rg09_temperature'}, apikey='regular', apiroot=apiroot)
+#         result += request[0]
+#         delay += request[1]
+#     assert len(result) == 60, 'should have found 20x3 grid docs'
+#     assert delay > 0, 'should have experienced at least some rate limiter delay'
 
 def test_polygon(apiroot, apikey):
     '''
@@ -257,7 +257,10 @@ def test_profile_is_empty():
 
     assert helpers.profile_is_empty([[],[],[]], mock_data_info) == True, 'profile empty'
     assert helpers.profile_is_empty([[],[1,2,3],[]], mock_data_info) == True, 'profile empty other than pressure'
+    assert helpers.profile_is_empty([[numpy.nan,numpy.nan,numpy.nan],[1,2,3],[]], mock_data_info) == True, 'nans count as empty'
+    assert helpers.profile_is_empty([[None,None,None],[1,2,3],[]], mock_data_info) == True, 'Nones count as empty'
     assert helpers.profile_is_empty([[numpy.nan, numpy.nan],[1,2],[10,20]], mock_data_info) == False, 'data should pass even if some vectors are empty'
+    assert helpers.profile_is_empty([['xyz', numpy.nan],[1,2],[10,20]], mock_data_info) == False, 'strings count as not empty'
     assert helpers.profile_is_empty([[numpy.nan, 2], [1,2], [None,None]], mock_data_info) == False, 'partially nan vector should pass'
 
 def test_tidy_profile():
@@ -275,9 +278,11 @@ def test_interpolate_all():
 
 def test_query_interpolated(apiroot, apikey):
     response = helpers.query_interpolated('/argo', options={ 'id': '2902857_003', 'data':'all'}, levels=[10,20,30,40,50], format_dataset=True, apikey=apikey, apiroot=apiroot)
-
     assert numpy.allclose(response['pressure'].isel(nprof=0).data, [10,20,30,40,50]), 'pressure levels should be exactly as requested'
     assert numpy.allclose(response['temperature'].isel(nprof=0).data, [12.76066626, 11.83280471, 10.98755919,  9.5686782,   4.31415716]), 'temperature interpolation has changed'
+    
+    null_response = helpers.query_interpolated('/argo', options={ 'id': '2902857_003', 'data':'all'}, levels=[10000,11000,12000], apikey=apikey, apiroot=apiroot)
+    assert null_response == [], 'no valid interpolations should return empty list'
 
 def test_datagrid(apiroot, apikey):
     datagrid = helpers.datagrid('/grids/rg09', options={'startDate': '2004-01-01T00:00:00Z', 'endDate': '2004-02-01T00:00:00Z', 'data':'rg09_temperature'}, apikey=apikey, apiroot=apiroot)

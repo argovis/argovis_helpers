@@ -674,7 +674,7 @@ def profile_is_empty(data, data_info):
     # check if a profile is nothing but nan / none in every variable except pressure
 
     for i in range(len(data)):
-        if data_info[0][i] != 'pressure' and any([v is not None and (type(v) is not float or not math.isnan(v)) for v in data[i]]):
+        if data_info[0][i] != 'pressure' and any([v is not None and (type(v) not in [float, numpy.float64] or not math.isnan(v)) for v in data[i]]):
             return False
 
     return True
