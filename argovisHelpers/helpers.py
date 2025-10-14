@@ -425,6 +425,7 @@ def datagrid(route, options={}, apikey='', apiroot='https://argovis-api.colorado
             timestamps = [m['timeseries'] for m in gridmeta]
         timestamps = list({x for sub in timestamps for x in sub})
         timestamps.sort()
+    timestamps = [parsetime(t) for t in timestamps]
     variables = [p['data_info'][0] for p in griddata]
     vars = list({x for sub in variables for x in sub})
     vars.sort()
@@ -449,11 +450,12 @@ def datagrid(route, options={}, apikey='', apiroot='https://argovis-api.colorado
                 times = p['timeseries']
             else:
                 times = m['timeseries']
+        times = [parsetime(t) for t in times]
         
         lon_idx = longitudes.index(p['geolocation']['coordinates'][0])
         lat_idx = latitudes.index(p['geolocation']['coordinates'][1])
         if isGrid:
-            time_idx = timestamps.index(p['timestamp'])
+            time_idx = timestamps.index(parsetime(p['timestamp']))
     
         for v in vars:
             if v in p['data_info'][0]:
@@ -743,6 +745,7 @@ def query_interpolated(route, options={}, apikey='', apiroot='https://argovis-ap
     longitudes = [p['geolocation']['coordinates'][0] for p in interpolated_profiles]
     latitudes = [p['geolocation']['coordinates'][1] for p in interpolated_profiles]
     timestamps = [p['timestamp'] for p in interpolated_profiles]
+    timestamps = [parsetime(t) for t in timestamps]
     
     coords = {
         "id": ("nprof", ids),
@@ -753,3 +756,17 @@ def query_interpolated(route, options={}, apikey='', apiroot='https://argovis-ap
 
     attrs = {}
     return xarray.Dataset(darray,coords,attrs)
+
+def regional_mean(dxr, form='area'):
+    # given an xarray dataset <dxr> with latitudes and longitudes as dimensions,
+    # calculate the mean of all data variables, weighted by grid cell area
+    weights = numpy.cos(numpy.deg2rad(dxr.latitude))
+    weights.name = "weights"
+    dxr_weighted = dxr.weighted(weights)
+    
+    if form =='area':
+        return dxr_weighted.mean(("longitude", "latitude"))
+    elif form == 'meridional':
+        return dxr_weighted.mean(("latitude"))
+    elif form == 'zonal':
+        return dxr_weighted.mean(("longitude"))
