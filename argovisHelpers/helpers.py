@@ -1,7 +1,6 @@
-import requests, datetime, copy, time, re, area, math, urllib, json, xarray, numpy, scipy.interpolate
+import requests, datetime, copy, time, re, area, math, urllib, json, xarray, numpy, scipy.interpolate, gsw
 from shapely.geometry import shape, box, Polygon
 from shapely.ops import orient
-import geopandas as gpd
 import pkg_resources
 from pkg_resources import DistributionNotFound
 
@@ -650,6 +649,7 @@ def find_bracket(lst, low_roi, high_roi):
 
 def interpolate_all(profile, levels, pressure_buffer=-1, pressure_index_buffer=-1):
     # interpolate all variables in a profile to a common set of levels
+    # assumes profile has its 'data_info' key present and that 'pressure' is one of the variables, to be interpolated on.
     
     ## remove any QC vectors
     variables = profile['data_info'][0]
@@ -681,16 +681,14 @@ def profile_is_empty(data, data_info):
 
     return True
 
-def query_interpolated(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', levels=None, format_dataset=False, verbose=False, pressure_buffer=-1, pressure_index_buffer=-1, suppress_no_interps=True, audit_all=False):
+def query_interpolated(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', levels=None, verbose=False, pressure_buffer=-1, pressure_index_buffer=-1, suppress_no_interps=True, audit_all=False):
     # fetch profiles from Argovis and interpolate all variables to a common set of levels.
-    # returns either a list of profile objects with interpolated data, or an xarray.Dataset dimensioned by profile index and levels, in analogy to Argo GDAC files.
 
     # route [string]: any argovis route
     # options [dict]: dict of corresponding query options
     # apikey [string]: your argovis apikey
     # apiroot [string]: the root url of the argovis api
     # levels [float list]: list of levels to interpolate to; if None, use Roemmich-Gilson levels
-    # format_dataset [bool]: return an xarray.Dataset dimensioned by profile index and levels, in analogy to Argo GDAC files; otherwise return the usual argovis profile objects
     # verbose [bool]: print out each individual request made to Argovis
     # pressure_buffer [float]: dbar of extra pressure range to include on either side of the ROI for interpolation; if -1, don't use a buffer
     # pressure_index_buffer [int]: minimum number of extra points to include in the buffer on either side of the ROI for interpolation; if -1, don't use a buffer
@@ -716,12 +714,20 @@ def query_interpolated(route, options={}, apikey='', apiroot='https://argovis-ap
     ## dump profiles that are nothing but None / NaN in every variable except pressure
     if suppress_no_interps:
         interpolated_profiles = [x for x in interpolated_profiles if not profile_is_empty(x['data'], x['data_info'])]
+        
+    return interpolated_profiles
 
-    ## return standard profile object
-    if not format_dataset:            
-        return interpolated_profiles
-
+def build_dataset(interpolated_profiles, levels):
     # munge into an xarray dataset dimensioned by a profile index and levels, in analogy to Argo GDAC files
+    # <interpolated_profiles> is a list of Argovis profile objects which must all have the same level spectrum
+    # <levels> is a list of floats labeling the levels.
+
+    # make sure the user at least appears to have respected the standard-levels requirement
+    for p in interpolated_profiles:
+        for v in p['data']:
+            if not len(v) == len(levels):
+                raise Exception('all variables in all profiles must be interpolated to a consistent set of levels, as described by the <levels> argument.')
+    
     nprofs = range(len(interpolated_profiles))
     variables = [p['data_info'][0] for p in interpolated_profiles]
     vars = list({x for sub in variables for x in sub})
@@ -729,18 +735,20 @@ def query_interpolated(route, options={}, apikey='', apiroot='https://argovis-ap
 
     darray = {}
     for v in vars:
-        darray[v] = (('nprof', 'level'), numpy.full((len(nprofs), len(levels)), numpy.nan, dtype=float))
+        if not v == 'pressure':
+            # pressures must be interpolated to a standard spectrum captured as the levels coord, no need to repeat them for every profile
+            darray[v] = (('nprof', 'level'), numpy.full((len(nprofs), len(levels)), numpy.nan, dtype=float))
 
     for i, p in enumerate(interpolated_profiles):
         prof_idx = i
         for v in vars:
-            if v in p['data_info'][0]:
+            if v in p['data_info'][0] and not v == 'pressure':
                 v_idx = p['data_info'][0].index(v)
                 for j,val in enumerate(p['data'][v_idx]):
                     lvl_idx = j
                     darray[v][1][prof_idx][lvl_idx] = val
 
-    # form coordinates (ie metadata)
+    # form coordinates
     ids = [p['_id'] for p in interpolated_profiles]
     longitudes = [p['geolocation']['coordinates'][0] for p in interpolated_profiles]
     latitudes = [p['geolocation']['coordinates'][1] for p in interpolated_profiles]
@@ -751,11 +759,71 @@ def query_interpolated(route, options={}, apikey='', apiroot='https://argovis-ap
         "id": ("nprof", ids),
         "longitude": ("nprof", longitudes),
         "latitude": ("nprof", latitudes),
-        "timestamp": ("nprof", timestamps)
+        "timestamp": ("nprof", timestamps),
+        "levels": ("level", levels),
     }
 
     attrs = {}
     return xarray.Dataset(darray,coords,attrs)
+
+def append_gsw(profiles, gsw_variables, temperature_key='temperature', salinity_key='salinity', pressure_key='pressure'):
+    def _clean(v): 
+        return numpy.array([numpy.nan if x is None else x for x in v])
+
+    # validate every profile
+    for p in profiles:
+        if not 'data_info' in p:
+            raise Exception('All profile must carry their data_info property, which they will if you included a "data" request in your query.')
+        if not pressure_key in p['data_info'][0]:
+            raise Exception('All GSW parameters require a pressure to calculate, and the value "'+pressure_key+'" you provided for pressure_key is not found in at least one of your profiles.')
+        if not salinity_key in p['data_info'][0]:
+            raise Exception('All GSW parameters require a salinity to calculate, and the value "'+salinity_key+'" you provided for salinity_key is not found in at least one of your profiles.')
+        if not temperature_key in p['data_info'][0] and any(item in gsw_variables for item in ['conservative_temperature', 'potential_density', 'Nsquared']):
+            raise Exception('The GSW parameters you requested require a temperature to calculate, and the value "'+temperature_key+'" you provided for temperature_key is not found in at least one of your profiles.')
+
+    munged = []
+    for profile in profiles:
+        prof = copy.deepcopy(profile)
+        longitude = prof['geolocation']['coordinates'][0]
+        latitude = prof['geolocation']['coordinates'][1]
+        temperature_idx = prof['data_info'][0].index(temperature_key)
+        salinity_idx = prof['data_info'][0].index(salinity_key)
+        pressure_idx = prof['data_info'][0].index(pressure_key)
+        units_idx = prof['data_info'][1].index('units')
+
+        t = _clean(prof['data'][temperature_idx])
+        s = _clean(prof['data'][salinity_idx])
+        p = _clean(prof['data'][pressure_idx])
+        
+        SA = gsw.SA_from_SP(s, p, longitude, latitude)
+        CT = gsw.CT_from_t(SA, t, p)
+        sigma0 = gsw.sigma0(SA, CT) + 1000
+        N2, _ = gsw.Nsquared(SA, CT, p, lat=latitude)
+
+        if 'absolute_salinity' in gsw_variables:
+            prof['data'].append(SA.tolist())
+            prof['data_info'][0].append('gsw_absolute_salinity')
+            prof['data_info'][2].append(['']*len(prof['data_info'][1]))
+            prof['data_info'][2][-1][units_idx] = 'g/kg'
+        if 'conservative_temperature' in gsw_variables:
+            prof['data'].append(CT.tolist())
+            prof['data_info'][0].append('gsw_conservative_temperature')
+            prof['data_info'][2].append(['']*len(prof['data_info'][1]))
+            prof['data_info'][2][-1][units_idx] = 'degC'
+        if 'potential_density' in gsw_variables:
+            prof['data'].append(sigma0.tolist())
+            prof['data_info'][0].append('gsw_potential_density')
+            prof['data_info'][2].append(['']*len(prof['data_info'][1]))
+            prof['data_info'][2][-1][units_idx] = 'kg/m^3'
+        if 'Nsquared' in gsw_variables:
+            prof['data'].append(N2.tolist())
+            prof['data_info'][0].append('gsw_Nsquared')
+            prof['data_info'][2].append(['']*len(prof['data_info'][1]))
+
+            
+        munged.append(prof)
+
+    return munged
 
 def regional_mean(dxr, form='area'):
     # given an xarray dataset <dxr> with latitudes and longitudes as dimensions,
@@ -770,3 +838,16 @@ def regional_mean(dxr, form='area'):
         return dxr_weighted.mean(("latitude"))
     elif form == 'zonal':
         return dxr_weighted.mean(("longitude"))
+
+def getvar(variable, data_doc, metadata_doc=None):
+    # given a raw data document which includes data_info, try and extract variable as a list.
+    # metadata_doc is required if data_doc doesn't have data_info
+
+    data_info = find_key('data_info', data_doc, metadata_doc)
+    try:
+        var_idx = data_info[0].index(variable)
+    except:
+        print(variable, ' not found in this data document; available variables are ', data_info[0])
+        return None
+    
+    return data_doc['data'][var_idx]
