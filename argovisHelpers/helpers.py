@@ -1,8 +1,13 @@
+from __future__ import annotations
 import requests, datetime, copy, time, re, area, math, urllib, json, xarray, numpy, scipy.interpolate, gsw
 from shapely.geometry import shape, box, Polygon
 from shapely.ops import orient
 import pkg_resources
 from pkg_resources import DistributionNotFound
+from dataclasses import dataclass, field
+from typing import Any
+from dateutil import parser
+from collections.abc import Sequence
 
 _avhcache = {}
 _CACHE_EXPIRY = 3600
@@ -85,7 +90,7 @@ def slice_timesteps(options, r):
     else:
         end = get_timebound(r, 'endDate')
         
-    delta = datetime.timedelta(days=timestep)
+    delta = datetime.datetime.timedelta(days=timestep)
     times = [start]
     while times[-1] + delta < end:
         times.append(times[-1]+delta)
@@ -371,6 +376,23 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
 
     return results
 
+def sort_and_dedupe(data):
+    # given a list <data> that may either be floats or lists of floats, 
+    # deduplicate the outer list and sort it either by value or by first element as appropriate.
+    def sort_key(x):
+        return x[0] if isinstance(x, (list, tuple)) else x
+
+    seen = set()
+    out = []
+
+    for x in data:
+        dedupe_key = x if not isinstance(x, (list, tuple)) else tuple(x)
+        if dedupe_key not in seen:
+            seen.add(dedupe_key)
+            out.append(x)
+
+    return sorted(out, key=sort_key)
+
 def datagrid(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', verbose=False):
     # perform a search exactly as query(...) on a grid or timeseries route,
     # and munge the results into an xarray.Dataset
@@ -398,8 +420,8 @@ def datagrid(route, options={}, apikey='', apiroot='https://argovis-api.colorado
         else:
             ### full level spectrum
             levels = [m['levels'] for m in gridmeta]
-        levels = list({x for sub in levels for x in sub})
-        levels.sort()
+        levels = [j for i in levels for j in i] 
+        levels = sort_and_dedupe(levels)
     elif isTS:
         levels = [0] # assume this is just a surface grid
         tslvls = [d.get('level', None) for d in griddata] # try and see if there are level annotations
@@ -422,7 +444,7 @@ def datagrid(route, options={}, apikey='', apiroot='https://argovis-api.colorado
         else:
             ### full time spectrum
             timestamps = [m['timeseries'] for m in gridmeta]
-        timestamps = list({x for sub in timestamps for x in sub})
+        timestamps = list({x for sub in timestamps for x in sub}) # no weird intervals like in levels
         timestamps.sort()
     timestamps = [parsetime(t) for t in timestamps]
     variables = [p['data_info'][0] for p in griddata]
@@ -469,7 +491,9 @@ def datagrid(route, options={}, apikey='', apiroot='https://argovis-api.colorado
                             level = p['level']
                         lvl_idx = levels.index(level)
                     darray[v][1][time_idx][lon_idx][lat_idx][lvl_idx] = val
-
+                    
+    if isinstance(levels[0], list): # integral ranges have weird levels, label them with strings
+        levels = ['_'.join([str(i) for i in x]) for x in levels]
     return xarray.Dataset(darray,coords = {'timestamp':timestamps, 'longitude':longitudes, 'latitude':latitudes, 'level':levels})
 
 def interpolate_to_levels(levels_raw, var_raw, levels_interp, pressure_buffer=-1, pressure_index_buffer=-1):
@@ -681,6 +705,10 @@ def profile_is_empty(data, data_info):
 
     return True
 
+def rg_levels():
+    # return the standard levels in dbar used in Roemmich-Gilson Argo climatology
+    return [2.5,10,20,30,40,50,60,70,80,90,100,110,120,130,140,150,160,170,182.5,200,220,240,260,280,300,320,340,360,380,400,420,440,462.5,500,550,600,650,700,750,800,850,900,950,1000,1050,1100,1150,1200,1250,1300,1350,1412.5,1500,1600,1700,1800,1900,1975]
+
 def query_interpolated(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', levels=None, verbose=False, pressure_buffer=-1, pressure_index_buffer=-1, suppress_no_interps=True, audit_all=False):
     # fetch profiles from Argovis and interpolate all variables to a common set of levels.
 
@@ -701,7 +729,7 @@ def query_interpolated(route, options={}, apikey='', apiroot='https://argovis-ap
         return
     if levels is None:
         print("warning: you didn't provide a level spectrum to interpolate on; using the Roemmich-Gilson levels by default.")
-        levels = [2.5,10,20,30,40,50,60,70,80,90,100,110,120,130,140,150,160,170,182.5,200,220,240,260,280,300,320,340,360,380,400,420,440,462.5,500,550,600,650,700,750,800,850,900,950,1000,1050,1100,1150,1200,1250,1300,1350,1412.5,1500,1600,1700,1800,1900,1975]
+        levels = rg_levels()
 
     ## fetch raw data from Argovis
     rawdata = query(route, options=options, apikey=apikey, apiroot=apiroot, verbose=verbose)
@@ -851,3 +879,81 @@ def getvar(variable, data_doc, metadata_doc=None):
         return None
     
     return data_doc['data'][var_idx]
+
+@dataclass
+class Profile:
+    rawdata: dict[str, Any] = field(default_factory=dict)
+    rawmeta: dict[str, Any] = field(default_factory=dict)
+    vars: dict[str, numpy.ndarray] = field(default_factory=dict, repr=False)
+
+    def __init__(self, data, meta=None):
+        self._rawdata = copy.deepcopy(data)
+        self._rawmeta = copy.deepcopy(meta)
+        
+        data_info = []
+        if 'data_info' in data:
+            data_info = data['data_info']
+        elif 'data_info' in meta:
+            data_info = meta['data_info']
+        else:
+            raise ValueError("no data_info property found")
+
+        self.vars = {}
+        for i, name in enumerate(data_info[0]):
+            arr = numpy.asarray(data['data'][i])
+            self.vars[name] = arr
+        del self._rawdata['data']
+
+        # dict for arbitrary annotations
+        self.attrs = {}
+
+    # ---- pretend like you're a dictionary for p['arbitrary_key'] ----
+    def __getitem__(self, key):
+        return self.attrs[key]
+
+    def __setitem__(self, key, value):
+        self.attrs[key] = value
+
+    def get(self, key, default=None):
+        return self.attrs.get(key, default)
+        
+    # ---- metadata sugar ----
+    @property
+    def id(self):
+        return self.rawdata['_id']
+
+    @property
+    def timestamp(self):
+        return parser.parse(self.rawdata['timestamp'])
+
+    @property
+    def longitude(self):
+        return float(self.rawdata['geolocation']['coordinates'][0])
+
+    @property
+    def latitude(self):
+        return float(self.rawdata['geolocation']['coordinates'][1])
+
+    @property
+    def rawdata(self):
+        return self._rawdata
+
+    @property
+    def rawmeta(self):
+        return self._rawmeta
+    
+    # ---- variable helpers ----
+    def variable_names(self):
+        return tuple(self.vars.keys())
+
+    def hasvar(self, name):
+        return name in self.vars
+
+    def getvar(self, name):
+        return self.vars.get(name)
+
+    def setvar(self, name, values):
+        arr = numpy.asarray(values)
+        if arr.ndim != 1:
+            raise ValueError(f"Variable {name!r} must be 1D, got shape {arr.shape}")
+        self.vars[name] = arr
