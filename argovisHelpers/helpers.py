@@ -530,6 +530,44 @@ def interpolate_to_levels(levels_raw, var_raw, levels_interp, pressure_buffer=-1
 
         return interp, flag
 
+def pchip_search(x, y, target, init_min, init_max, init_step, threshold=0.0001, iteration_max=100):
+    # use pchip interpolation to find the value of x that results, within <threshold>, in y. 
+    # give up after <iteration_max> iterations.
+
+    guess = -99999
+    fguess = -99999
+    range_min = max(init_min, min(x))
+    range_max = min(init_max, max(x))
+    comb = numpy.arange(range_min, range_max + init_step, init_step)
+    iterations = 0
+
+    while abs(fguess - target) > threshold and iterations < iteration_max and range_max > range_min:
+        fcomb, flag = interpolate_to_levels(x, y, comb)
+        lower = None
+        upper = None
+        # find the first bracket around the target value
+        for i in range(len(fcomb)-1):
+            if fcomb[i] <= target and fcomb[i+1] > target:
+                lower = i
+                upper = i+1
+                break
+        if lower is None:
+            return None # nothing brackets the target value, give up
+        guess = comb[lower]
+        fguess = fcomb[lower]
+        range_min = comb[lower]
+        range_max = comb[upper]
+        if range_max == range_min:
+            break
+        stepsize = (range_max - range_min) / 10
+        comb = numpy.arange(range_min, range_max + stepsize, stepsize)
+        iterations += 1
+
+    if abs(fguess - target) < threshold:
+        return guess
+    else:
+        return None
+
 def tidy_profile(pressure, var, flag):
     # pchip needs pressures to be monotonically increasing; also need the dependent variable to always be defined
     # flags (little endian):
