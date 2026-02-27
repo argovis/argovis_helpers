@@ -643,18 +643,12 @@ def mask_far_interps(measured_pressures, interp_levels, interp_values):
     for i, level in enumerate(interp_levels):
         ## determine how far is too far:
         radius = 0
-        if level < 100:
-            radius = 10
+        if level < 50:
+            radius = 50
         elif level < 150:
-            radius = 20
-        elif level < 250:
-            radius = 40
-        elif level < 350:
-            radius = 60
-        elif level < 450:
-            radius = 80
+            radius = 150
         else:
-            radius = 100
+            radius = 500
 
         i_below = 0
         i_above = len(measured_pressures)-1
