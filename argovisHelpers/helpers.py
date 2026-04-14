@@ -393,7 +393,7 @@ def sort_and_dedupe(data):
 
     return sorted(out, key=sort_key)
 
-def datagrid(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', verbose=False):
+def queryGrid(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', verbose=False):
     # perform a search exactly as query(...) on a grid or timeseries route,
     # and munge the results into an xarray.Dataset
     
@@ -496,9 +496,19 @@ def datagrid(route, options={}, apikey='', apiroot='https://argovis-api.colorado
         levels = ['_'.join([str(i) for i in x]) for x in levels]
     return xarray.Dataset(darray,coords = {'timestamp':timestamps, 'longitude':longitudes, 'latitude':latitudes, 'level':levels})
 
-def interpolate_to_levels(levels_raw, var_raw, levels_interp, pressure_buffer=-1, pressure_index_buffer=-1):
+def queryProfile(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', verbose=False):
+    # perform a search exactly as query(...) on a profile schema route,
+    # and munge the results into a list of Profile objects
+
+    ## fetch raw data from Argovis
+    data = query(route, options=options, apikey=apikey, apiroot=apiroot, verbose=verbose)
+    meta = query(route, options={**options, 'batchmeta':True}, apikey=apikey, apiroot=apiroot, verbose=verbose)
+    metalookup = {x['_id']: x for x in meta}
+
+    return [Profile(x, metalookup[x['metadata'][0]])]
+
+def interpolate_to_levels(levels_raw, var_raw, levels_interp):
     # interpolate <var> to <levels> using PCHIP interpolation
-    # keep <pressure_buffer> dbar on either side of the ROI and <pressure_index_buffer> points in the pressure buffer margins, at least.
     # flag 32 (little endian): ROI didn't contain enough info to interpolate
 
     flag = 0
@@ -506,67 +516,17 @@ def interpolate_to_levels(levels_raw, var_raw, levels_interp, pressure_buffer=-1
 
     # some truly pathological profiles will have no levels left at this point
     if len(pressure) == 0:
-        interp = numpy.full(len(levels_interp), numpy.nan)
+        interp = numpy.ma.masked_array(numpy.full(len(levels_interp), np.nan), mask=True)
         flag = flag | 32
         return interp, flag
 
-    # find indexes of ROI
-    if pressure_buffer >= 0 and pressure_index_buffer >= 0:
-        p_bracket = pad_bracket(pressure, levels_interp[0], levels_interp[-1], pressure_buffer, pressure_index_buffer)
-    else:
-        p_bracket = [0, len(pressure)-1]
+    # interpolate
+    interp = scipy.interpolate.PchipInterpolator(pressure, variable, extrapolate=True)(levels_interp)
 
-    # ROI must contain at least two points for Pchip
-    if len(pressure[p_bracket[0]:p_bracket[1]+1]) < 2:
-        interp = numpy.full(len(levels_interp), numpy.nan)
-        flag = flag | 32
-        return interp, flag
-    else:
-        # interpolate; don't extrapolate to levels outside of measurement range
-        interp = scipy.interpolate.PchipInterpolator(pressure[p_bracket[0]:p_bracket[1]+1], variable[p_bracket[0]:p_bracket[1]+1], extrapolate=False)(levels_interp)
+    # mask levels that fall outside the insitu range, or which are too far from an insitu measurement
+    interp = mask_far_interps(pressure, levels_interp, interp)
 
-        # if there wasn't a measured level within a certain radius of each level of interest, mask the interpolation at that level.
-        interp = mask_far_interps(pressure[p_bracket[0]:p_bracket[1]+1], levels_interp, interp)
-
-        return interp, flag
-
-def pchip_search(x, y, target, init_min, init_max, init_step, threshold=0.0001, iteration_max=100):
-    # use pchip interpolation to find the value of x that results, within <threshold>, in y. 
-    # give up after <iteration_max> iterations.
-
-    guess = -99999
-    fguess = -99999
-    range_min = max(init_min, min(x))
-    range_max = min(init_max, max(x))
-    comb = numpy.arange(range_min, range_max + init_step, init_step)
-    iterations = 0
-
-    while abs(fguess - target) > threshold and iterations < iteration_max and range_max > range_min:
-        fcomb, flag = interpolate_to_levels(x, y, comb)
-        lower = None
-        upper = None
-        # find the first bracket around the target value
-        for i in range(len(fcomb)-1):
-            if fcomb[i] <= target and fcomb[i+1] > target:
-                lower = i
-                upper = i+1
-                break
-        if lower is None:
-            return None # nothing brackets the target value, give up
-        guess = comb[lower]
-        fguess = fcomb[lower]
-        range_min = comb[lower]
-        range_max = comb[upper]
-        if range_max == range_min:
-            break
-        stepsize = (range_max - range_min) / 10
-        comb = numpy.arange(range_min, range_max + stepsize, stepsize)
-        iterations += 1
-
-    if abs(fguess - target) < threshold:
-        return guess
-    else:
-        return None
+    return interp, flag
 
 def tidy_profile(pressure, var, flag):
     # pchip needs pressures to be monotonically increasing; also need the dependent variable to always be defined
@@ -621,27 +581,19 @@ def tidy_profile(pressure, var, flag):
     flag = flag | 8
     return tidy_profile(p,v,flag)
 
-def pad_bracket(lst, low_roi, high_roi, buffer, places):
-    # returns the indexes of the last element below and first element above an ROI padded with <buffer>, and containing at least <places> elements in the padding.
-
-    tight_bracket = find_bracket(lst, low_roi, high_roi)
-    buffer_bracket = find_bracket(lst, low_roi - buffer, high_roi + buffer)
-
-    low = buffer_bracket[0]
-    if tight_bracket[0] - buffer_bracket[0] < places-1: # -1 since find_bracket gives the first bound in the wing, so there's already one point in the wing even for tight_bracket
-        low = max(0, tight_bracket[0] - places+1)
-
-    high = buffer_bracket[1]
-    if buffer_bracket[1] - tight_bracket[1] < places-1:
-        high = min(len(lst)-1, tight_bracket[1] + places-1)
-
-    return low, high
-
 def mask_far_interps(measured_pressures, interp_levels, interp_values):
     # mask interpolated values that are too far from the nearest measured level
+    # or which fall outside range of measured levels
+
+    mask = [False for x in interp_levels]
 
     for i, level in enumerate(interp_levels):
-        ## determine how far is too far:
+        ## mask out anything that was extrapolated:
+        if interp_levels[i] < measured_pressures[0] or interp_levels[i] > measured_pressures[-1]:
+            mask[i] = True
+            continue
+
+        ## determine how far is too far when interpolating to interiror holes:
         radius = 0
         if level < 50:
             radius = 50
@@ -659,74 +611,89 @@ def mask_far_interps(measured_pressures, interp_levels, interp_values):
                 i_above = j
                 break
         if abs(measured_pressures[i_below] - level) > radius or abs(measured_pressures[i_above] - level) > radius:
-            interp_values[i] = numpy.nan
+            mask[i] = True
 
-    return interp_values
+    return numpy.ma.masked_array(interp_values, mask=mask)
 
-def find_bracket(lst, low_roi, high_roi):
-    # lst: ordered list of floats
-    # low_roi: lower bound of region of interest
-    # high_roi: upper bound "
-    # returns the indexes of the last element below and first element above the ROI, without running off ends of list
-
-    if low_roi <= lst[0]:
-        low_index = 0
-    else:
-        low = 0
-        high = len(lst) - 1
-        low_index = -1
-
-        while low <= high:
-            mid = (low + high) // 2
-
-            if lst[mid] < low_roi:
-                low_index = mid
-                low = mid + 1
-            else:
-                high = mid - 1
-
-    if high_roi >= lst[-1]:
-        high_index = len(lst) - 1
-    else:
-        low = 0
-        high = len(lst) - 1
-        high_index = -1
-
-        while low <= high:
-            mid = (low + high) // 2
-
-            if lst[mid] > high_roi:
-                high_index = mid
-                high = mid - 1
-            else:
-                low = mid + 1
-
-    return low_index, high_index
-
-def interpolate_all(profile, levels, pressure_buffer=-1, pressure_index_buffer=-1):
+def interpolate_all(profile, levels):
     # interpolate all variables in a profile to a common set of levels
-    # assumes profile has its 'data_info' key present and that 'pressure' is one of the variables, to be interpolated on.
+    # profile is either a json profile schema or a Profile object.
+    # assumes json profile has its 'data_info' key present and that 'pressure' is one of the variables, to be interpolated on.
     
-    ## remove any QC vectors
-    variables = profile['data_info'][0]
-    qcvecs = ['qc' in x for x in variables] # a bit duck-typie...
-    data = [x for i,x in enumerate(profile['data']) if not qcvecs[i]]
-    data_info = [None, None, None]
-    data_info[0] = [x for i,x in enumerate(profile['data_info'][0]) if not qcvecs[i]]
-    data_info[1] = profile['data_info'][1]
-    data_info[2] = [x for i,x in enumerate(profile['data_info'][2]) if not qcvecs[i]]
+    if isinstance(profile, Profile):
+        variables = profile.variable_names()
+        datavecs = [x for x in variables if 'qc' not in x] # don't interpolate QC; a bit duck-typie...
+        pressure = profile.getvar('pressure')
+        p = copy.deepcopy(profile)
+        p.delvar('pressure')
+        p.setvar('pressure', levels)
+        for v in variables:
+            if v in datavecs and v != 'pressure':
+                i = interpolate_to_levels(pressure, profile.getvar(v), levels)
+                p.delvar(v)
+                p.setvar(v, i)
+            else:
+                p.delvar(v)
+        return p       
+    else:
+        ## remove any QC vectors
+        variables = profile['data_info'][0]
+        qcvecs = ['qc' in x for x in variables] # a bit duck-typie...
+        data = [x for i,x in enumerate(profile['data']) if not qcvecs[i]]
+        data_info = [None, None, None]
+        data_info[0] = [x for i,x in enumerate(profile['data_info'][0]) if not qcvecs[i]]
+        data_info[1] = profile['data_info'][1]
+        data_info[2] = [x for i,x in enumerate(profile['data_info'][2]) if not qcvecs[i]]
 
-    level_idx = data_info[0].index('pressure')
-    raw_levels = data[level_idx]
+        level_idx = data_info[0].index('pressure')
+        raw_levels = data[level_idx]
 
-    for i in range(len(data_info[0])):
-        if i == level_idx:
-            data[i] = levels
-        else:
-            data[i], _ = interpolate_to_levels(raw_levels, data[i], levels, pressure_buffer, pressure_index_buffer)
-            data[i] = list(data[i])
+        for i in range(len(data_info[0])):
+            if i == level_idx:
+                data[i] = levels
+            else:
+                data[i], _ = interpolate_to_levels(raw_levels, data[i], levels)
+                data[i] = list(data[i])
 
-    return {**profile, 'data':data, 'data_info':data_info}
+        return {**profile, 'data':data, 'data_info':data_info}
+
+def pchip_search(x, y, target, init_min, init_max, init_step, threshold=0.0001, iteration_max=100):
+    # use pchip interpolation to find the value of x that results, within <threshold>, in y. 
+    # give up after <iteration_max> iterations.
+
+    guess = -99999
+    fguess = -99999
+    range_min = max(init_min, min(x))
+    range_max = min(init_max, max(x))
+    comb = numpy.arange(range_min, range_max + init_step, init_step)
+    iterations = 0
+
+    while abs(fguess - target) > threshold and iterations < iteration_max and range_max > range_min:
+        fcomb, flag = interpolate_to_levels(x, y, comb)
+        lower = None
+        upper = None
+        # find the first bracket around the target value
+        for i in range(len(fcomb)-1):
+            if fcomb[i] <= target and fcomb[i+1] > target:
+                lower = i
+                upper = i+1
+                break
+        if lower is None:
+            return None # nothing brackets the target value, give up
+        guess = comb[lower]
+        fguess = fcomb[lower]
+        range_min = comb[lower]
+        range_max = comb[upper]
+        if range_max == range_min:
+            break
+        stepsize = (range_max - range_min) / 10
+        comb = numpy.arange(range_min, range_max + stepsize, stepsize)
+        iterations += 1
+
+    if abs(fguess - target) < threshold:
+        return guess
+    else:
+        return None
 
 def profile_is_empty(data, data_info):
     # check if a profile is nothing but nan / none in every variable except pressure
@@ -740,42 +707,6 @@ def profile_is_empty(data, data_info):
 def rg_levels():
     # return the standard levels in dbar used in Roemmich-Gilson Argo climatology
     return [2.5,10,20,30,40,50,60,70,80,90,100,110,120,130,140,150,160,170,182.5,200,220,240,260,280,300,320,340,360,380,400,420,440,462.5,500,550,600,650,700,750,800,850,900,950,1000,1050,1100,1150,1200,1250,1300,1350,1412.5,1500,1600,1700,1800,1900,1975]
-
-def query_interpolated(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', levels=None, verbose=False, pressure_buffer=-1, pressure_index_buffer=-1, suppress_no_interps=True, audit_all=False):
-    # fetch profiles from Argovis and interpolate all variables to a common set of levels.
-
-    # route [string]: any argovis route
-    # options [dict]: dict of corresponding query options
-    # apikey [string]: your argovis apikey
-    # apiroot [string]: the root url of the argovis api
-    # levels [float list]: list of levels to interpolate to; if None, use Roemmich-Gilson levels
-    # verbose [bool]: print out each individual request made to Argovis
-    # pressure_buffer [float]: dbar of extra pressure range to include on either side of the ROI for interpolation; if -1, don't use a buffer
-    # pressure_index_buffer [int]: minimum number of extra points to include in the buffer on either side of the ROI for interpolation; if -1, don't use a buffer
-    # suppress_no_interps [bool]: drop profiles that are nothing but NaN in every variable except pressure after interpolation
-    # audit_all [bool]: return a tuple of (interpolated_profiles, raw_profiles) for auditing purposes
-
-    ## request validation
-    if 'data' not in options:
-        raise Exception('Interpolated queries require some level data to interpolate on; please add a data request to your query options.')
-        return
-    if levels is None:
-        print("warning: you didn't provide a level spectrum to interpolate on; using the Roemmich-Gilson levels by default.")
-        levels = rg_levels()
-
-    ## fetch raw data from Argovis
-    rawdata = query(route, options=options, apikey=apikey, apiroot=apiroot, verbose=verbose)
-    interpolated_profiles = [interpolate_all(x, levels, pressure_buffer, pressure_index_buffer) for x in rawdata]
-    
-    ## intended for sanity checking
-    if audit_all:
-        return interpolated_profiles, rawdata
-
-    ## dump profiles that are nothing but None / NaN in every variable except pressure
-    if suppress_no_interps:
-        interpolated_profiles = [x for x in interpolated_profiles if not profile_is_empty(x['data'], x['data_info'])]
-        
-    return interpolated_profiles
 
 def build_dataset(interpolated_profiles, levels):
     # munge into an xarray dataset dimensioned by a profile index and levels, in analogy to Argo GDAC files
@@ -826,64 +757,22 @@ def build_dataset(interpolated_profiles, levels):
     attrs = {}
     return xarray.Dataset(darray,coords,attrs)
 
-def append_gsw(profiles, gsw_variables, temperature_key='temperature', salinity_key='salinity', pressure_key='pressure'):
-    def _clean(v): 
-        return numpy.array([numpy.nan if x is None else x for x in v])
+def setvar(profile, varname, values, data_info_meta=None):
+    # set a new variable on a JSON profile, in analogy to Profile.setvar
+    # data_info_meta should be a list specifying the metadata for this variable named in data_info[1]. 
+    if not 'data_info' in profile:
+        raise Exception('Profile must carry its data_info property, which it will if you included a "data" request in your query.')
+    if varname in profile['data_info'][0]:
+        raise Exception(f'Profile already has a variable {varname}.')
 
-    # validate every profile
-    for p in profiles:
-        if not 'data_info' in p:
-            raise Exception('All profile must carry their data_info property, which they will if you included a "data" request in your query.')
-        if not pressure_key in p['data_info'][0]:
-            raise Exception('All GSW parameters require a pressure to calculate, and the value "'+pressure_key+'" you provided for pressure_key is not found in at least one of your profiles.')
-        if not salinity_key in p['data_info'][0]:
-            raise Exception('All GSW parameters require a salinity to calculate, and the value "'+salinity_key+'" you provided for salinity_key is not found in at least one of your profiles.')
-        if not temperature_key in p['data_info'][0] and any(item in gsw_variables for item in ['conservative_temperature', 'potential_density', 'Nsquared']):
-            raise Exception('The GSW parameters you requested require a temperature to calculate, and the value "'+temperature_key+'" you provided for temperature_key is not found in at least one of your profiles.')
+    p = copy.deepcopy(profile)
+    p['data'].append(values)
+    p['data_info'][0].append(varname)
+    if data_info_meta is None:
+        data_info_meta = ['']*len(p['data_info'][1])
+    p['data_info'][2].append(data_info_meta)
 
-    munged = []
-    for profile in profiles:
-        prof = copy.deepcopy(profile)
-        longitude = prof['geolocation']['coordinates'][0]
-        latitude = prof['geolocation']['coordinates'][1]
-        temperature_idx = prof['data_info'][0].index(temperature_key)
-        salinity_idx = prof['data_info'][0].index(salinity_key)
-        pressure_idx = prof['data_info'][0].index(pressure_key)
-        units_idx = prof['data_info'][1].index('units')
-
-        t = _clean(prof['data'][temperature_idx])
-        s = _clean(prof['data'][salinity_idx])
-        p = _clean(prof['data'][pressure_idx])
-        
-        SA = gsw.SA_from_SP(s, p, longitude, latitude)
-        CT = gsw.CT_from_t(SA, t, p)
-        sigma0 = gsw.sigma0(SA, CT) + 1000
-        N2, _ = gsw.Nsquared(SA, CT, p, lat=latitude)
-
-        if 'absolute_salinity' in gsw_variables:
-            prof['data'].append(SA.tolist())
-            prof['data_info'][0].append('gsw_absolute_salinity')
-            prof['data_info'][2].append(['']*len(prof['data_info'][1]))
-            prof['data_info'][2][-1][units_idx] = 'g/kg'
-        if 'conservative_temperature' in gsw_variables:
-            prof['data'].append(CT.tolist())
-            prof['data_info'][0].append('gsw_conservative_temperature')
-            prof['data_info'][2].append(['']*len(prof['data_info'][1]))
-            prof['data_info'][2][-1][units_idx] = 'degC'
-        if 'potential_density' in gsw_variables:
-            prof['data'].append(sigma0.tolist())
-            prof['data_info'][0].append('gsw_potential_density')
-            prof['data_info'][2].append(['']*len(prof['data_info'][1]))
-            prof['data_info'][2][-1][units_idx] = 'kg/m^3'
-        if 'Nsquared' in gsw_variables:
-            prof['data'].append(N2.tolist())
-            prof['data_info'][0].append('gsw_Nsquared')
-            prof['data_info'][2].append(['']*len(prof['data_info'][1]))
-
-            
-        munged.append(prof)
-
-    return munged
+    return p
 
 def regional_mean(dxr, form='area'):
     # given an xarray dataset <dxr> with latitudes and longitudes as dimensions,
@@ -922,13 +811,11 @@ class Profile:
         self._rawdata = copy.deepcopy(data)
         self._rawmeta = copy.deepcopy(meta)
         
-        data_info = []
+        data_info = [[],[],[]]
         if 'data_info' in data:
             data_info = data['data_info']
         elif 'data_info' in meta:
             data_info = meta['data_info']
-        else:
-            raise ValueError("no data_info property found")
 
         self.vars = {}
         for i, name in enumerate(data_info[0]):
@@ -985,7 +872,10 @@ class Profile:
         return self.vars.get(name)
 
     def setvar(self, name, values):
-        arr = numpy.asarray(values)
+        arr = numpy.ma.masked_array(values) 
         if arr.ndim != 1:
             raise ValueError(f"Variable {name!r} must be 1D, got shape {arr.shape}")
         self.vars[name] = arr
+
+    def delvar(self, name):
+        del self.vars[name]
