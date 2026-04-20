@@ -429,6 +429,7 @@ def queryGrid(route, options={}, apikey='', apiroot='https://argovis-api.colorad
         if len(tslvls) > 0:
             levels = tslvls
             levels.sort()
+
     locations = [d['geolocation']['coordinates'] for d in griddata]
     longitudes = list(set([x[0] for x in locations]))
     longitudes.sort()
@@ -505,195 +506,7 @@ def queryProfile(route, options={}, apikey='', apiroot='https://argovis-api.colo
     meta = query(route, options={**options, 'batchmeta':True}, apikey=apikey, apiroot=apiroot, verbose=verbose)
     metalookup = {x['_id']: x for x in meta}
 
-    return [Profile(x, metalookup[x['metadata'][0]])]
-
-def interpolate_to_levels(levels_raw, var_raw, levels_interp):
-    # interpolate <var> to <levels> using PCHIP interpolation
-    # flag 32 (little endian): ROI didn't contain enough info to interpolate
-
-    flag = 0
-    pressure, variable, flag = tidy_profile(levels_raw, var_raw, flag)
-
-    # some truly pathological profiles will have no levels left at this point
-    if len(pressure) == 0:
-        interp = numpy.ma.masked_array(numpy.full(len(levels_interp), np.nan), mask=True)
-        flag = flag | 32
-        return interp, flag
-
-    # interpolate
-    interp = scipy.interpolate.PchipInterpolator(pressure, variable, extrapolate=True)(levels_interp)
-
-    # mask levels that fall outside the insitu range, or which are too far from an insitu measurement
-    interp = mask_far_interps(pressure, levels_interp, interp)
-
-    return interp, flag
-
-def tidy_profile(pressure, var, flag):
-    # pchip needs pressures to be monotonically increasing; also need the dependent variable to always be defined
-    # flags (little endian):
-    # 1: degenerate adjacent levels
-    # 2: levels in reverse order
-    # 4: variable of interest was NaN, masked
-    # 8: levels non-monotonic, had to sort
-    # 16: pressure was NaN, masked
-
-    ## dependent variable must be defined
-    mask = [0]*len(var)
-    for i in range(len(var)):
-        if var[i] is None or math.isnan(var[i]):
-            mask[i] = 1
-            flag = flag | 4
-    p = [pressure[i] for i in range(len(mask)) if mask[i]==0]
-    v = [var[i] for i in range(len(mask)) if mask[i]==0]
-
-    ## pressure must be defined
-    mask = [0]*len(p)
-    for i in range(len(p)):
-        if p[i] is None or math.isnan(p[i]):
-            mask[i] = 1
-            flag = flag | 16
-    p = [p[i] for i in range(len(mask)) if mask[i]==0]
-    v = [v[i] for i in range(len(mask)) if mask[i]==0]
-
-    ## drop degenerate levels and flag
-    mask = [0]*len(p)
-    for i in range(len(p)-1):
-        if p[i] == p[i+1]:
-            mask[i] = 1
-            mask[i+1] = 1
-            flag = flag | 1
-    p = [p[i] for i in range(len(mask)) if mask[i]==0]
-    v = [v[i] for i in range(len(mask)) if mask[i]==0]
-
-    if all(p[i] < p[i + 1] for i in range(len(p) - 1)):
-        # pressure is monotonically increasing, return
-        return p, v, flag
-
-    if all(p[i] > p[i + 1] for i in range(len(p) - 1)):
-        # pressure is monotonically decreasing, reverse and return
-        flag = flag | 2
-        return p[::-1], v[::-1], flag
-
-    # pressure is non-monotonic, sort and try again
-    x = sorted(zip(p,v))
-    p = [element[0] for element in x]
-    v = [element[1] for element in x]
-    flag = flag | 8
-    return tidy_profile(p,v,flag)
-
-def mask_far_interps(measured_pressures, interp_levels, interp_values):
-    # mask interpolated values that are too far from the nearest measured level
-    # or which fall outside range of measured levels
-
-    mask = [False for x in interp_levels]
-
-    for i, level in enumerate(interp_levels):
-        ## mask out anything that was extrapolated:
-        if interp_levels[i] < measured_pressures[0] or interp_levels[i] > measured_pressures[-1]:
-            mask[i] = True
-            continue
-
-        ## determine how far is too far when interpolating to interiror holes:
-        radius = 0
-        if level < 50:
-            radius = 50
-        elif level < 150:
-            radius = 150
-        else:
-            radius = 500
-
-        i_below = 0
-        i_above = len(measured_pressures)-1
-        for j in range(len(measured_pressures)):
-            if measured_pressures[j] <= level:
-                i_below = j
-            else:
-                i_above = j
-                break
-        if abs(measured_pressures[i_below] - level) > radius or abs(measured_pressures[i_above] - level) > radius:
-            mask[i] = True
-
-    return numpy.ma.masked_array(interp_values, mask=mask)
-
-def interpolate_all(profile, levels):
-    # interpolate all variables in a profile to a common set of levels
-    # profile is either a json profile schema or a Profile object.
-    # assumes json profile has its 'data_info' key present and that 'pressure' is one of the variables, to be interpolated on.
-    
-    if isinstance(profile, Profile):
-        variables = profile.variable_names()
-        datavecs = [x for x in variables if 'qc' not in x] # don't interpolate QC; a bit duck-typie...
-        pressure = profile.getvar('pressure')
-        p = copy.deepcopy(profile)
-        p.delvar('pressure')
-        p.setvar('pressure', levels)
-        for v in variables:
-            if v in datavecs and v != 'pressure':
-                i = interpolate_to_levels(pressure, profile.getvar(v), levels)
-                p.delvar(v)
-                p.setvar(v, i)
-            else:
-                p.delvar(v)
-        return p       
-    else:
-        ## remove any QC vectors
-        variables = profile['data_info'][0]
-        qcvecs = ['qc' in x for x in variables] # a bit duck-typie...
-        data = [x for i,x in enumerate(profile['data']) if not qcvecs[i]]
-        data_info = [None, None, None]
-        data_info[0] = [x for i,x in enumerate(profile['data_info'][0]) if not qcvecs[i]]
-        data_info[1] = profile['data_info'][1]
-        data_info[2] = [x for i,x in enumerate(profile['data_info'][2]) if not qcvecs[i]]
-
-        level_idx = data_info[0].index('pressure')
-        raw_levels = data[level_idx]
-
-        for i in range(len(data_info[0])):
-            if i == level_idx:
-                data[i] = levels
-            else:
-                data[i], _ = interpolate_to_levels(raw_levels, data[i], levels)
-                data[i] = list(data[i])
-
-        return {**profile, 'data':data, 'data_info':data_info}
-
-def pchip_search(x, y, target, init_min, init_max, init_step, threshold=0.0001, iteration_max=100):
-    # use pchip interpolation to find the value of x that results, within <threshold>, in y. 
-    # give up after <iteration_max> iterations.
-
-    guess = -99999
-    fguess = -99999
-    range_min = max(init_min, min(x))
-    range_max = min(init_max, max(x))
-    comb = numpy.arange(range_min, range_max + init_step, init_step)
-    iterations = 0
-
-    while abs(fguess - target) > threshold and iterations < iteration_max and range_max > range_min:
-        fcomb, flag = interpolate_to_levels(x, y, comb)
-        lower = None
-        upper = None
-        # find the first bracket around the target value
-        for i in range(len(fcomb)-1):
-            if fcomb[i] <= target and fcomb[i+1] > target:
-                lower = i
-                upper = i+1
-                break
-        if lower is None:
-            return None # nothing brackets the target value, give up
-        guess = comb[lower]
-        fguess = fcomb[lower]
-        range_min = comb[lower]
-        range_max = comb[upper]
-        if range_max == range_min:
-            break
-        stepsize = (range_max - range_min) / 10
-        comb = numpy.arange(range_min, range_max + stepsize, stepsize)
-        iterations += 1
-
-    if abs(fguess - target) < threshold:
-        return guess
-    else:
-        return None
+    return [Profile(x, metalookup[x['metadata'][0]]) for x in data]
 
 def profile_is_empty(data, data_info):
     # check if a profile is nothing but nan / none in every variable except pressure
@@ -710,42 +523,75 @@ def rg_levels():
 
 def build_dataset(interpolated_profiles, levels):
     # munge into an xarray dataset dimensioned by a profile index and levels, in analogy to Argo GDAC files
-    # <interpolated_profiles> is a list of Argovis profile objects which must all have the same level spectrum
+    # <interpolated_profiles> is a list of Argovis profile JSON or a list of Profile objects which must all have the same level spectrum
     # <levels> is a list of floats labeling the levels.
 
-    # make sure the user at least appears to have respected the standard-levels requirement
-    for p in interpolated_profiles:
-        for v in p['data']:
-            if not len(v) == len(levels):
-                raise Exception('all variables in all profiles must be interpolated to a consistent set of levels, as described by the <levels> argument.')
-    
+    # shred Profiles or json into the information we need
     nprofs = range(len(interpolated_profiles))
-    variables = [p['data_info'][0] for p in interpolated_profiles]
-    vars = list({x for sub in variables for x in sub})
-    vars.sort()
-
     darray = {}
-    for v in vars:
-        if not v == 'pressure':
-            # pressures must be interpolated to a standard spectrum captured as the levels coord, no need to repeat them for every profile
-            darray[v] = (('nprof', 'level'), numpy.full((len(nprofs), len(levels)), numpy.nan, dtype=float))
+    ids = []
+    longitudes = []
+    latitudes = []
+    timestamps = []
+    if isinstance(interpolated_profiles[0], Profile):
+        ## Profile objects
+        variables = [p.variable_names() for p in interpolated_profiles]
+        vars = list({x for sub in variables for x in sub})
+        vars.sort()
 
-    for i, p in enumerate(interpolated_profiles):
-        prof_idx = i
+        ### empty block for variables
         for v in vars:
-            if v in p['data_info'][0] and not v == 'pressure':
-                v_idx = p['data_info'][0].index(v)
-                for j,val in enumerate(p['data'][v_idx]):
-                    lvl_idx = j
-                    darray[v][1][prof_idx][lvl_idx] = val
+            if not v == 'pressure':
+                darray[v] = (('nprof', 'level'), numpy.full((len(nprofs), len(levels)), numpy.nan, dtype=float))
 
-    # form coordinates
-    ids = [p['_id'] for p in interpolated_profiles]
-    longitudes = [p['geolocation']['coordinates'][0] for p in interpolated_profiles]
-    latitudes = [p['geolocation']['coordinates'][1] for p in interpolated_profiles]
-    timestamps = [p['timestamp'] for p in interpolated_profiles]
-    timestamps = [parsetime(t) for t in timestamps]
-    
+        #### fill in variables
+        for i, p in enumerate(interpolated_profiles):
+            prof_idx = i
+            for v in vars:
+                if v in p.variable_names() and not v == 'pressure':
+                    var = p.getvar(v)
+                    if len(var) != len(levels):
+                        raise Exception('all variables in all profiles must be interpolated to a consistent set of levels, as described by the <levels> argument.')
+                    for j,val in enumerate(var):
+                        lvl_idx = j
+                        darray[v][1][prof_idx][lvl_idx] = val
+
+        #### form coordinates
+        ids = [p.id for p in interpolated_profiles]
+        longitudes = [p.longitude for p in interpolated_profiles]
+        latitudes = [p.latitude for p in interpolated_profiles]
+        timestamps = [p.timestamp for p in interpolated_profiles]
+        timestamps = [parsetime(t) for t in timestamps]
+    else:
+        ## JSON docs
+        variables = [p['data_info'][0] for p in interpolated_profiles]
+        vars = list({x for sub in variables for x in sub})
+        vars.sort()
+
+        ### empty block for variables
+        for v in vars:
+            if not v == 'pressure':
+                darray[v] = (('nprof', 'level'), numpy.full((len(nprofs), len(levels)), numpy.nan, dtype=float))
+
+        ### fill in variables
+        for i, p in enumerate(interpolated_profiles):
+            prof_idx = i
+            for v in vars:
+                if v in p['data_info'][0] and not v == 'pressure':
+                    v_idx = p['data_info'][0].index(v)
+                    if len(p['data'][v_idx]) != len(levels):
+                        raise Exception('all variables in all profiles must be interpolated to a consistent set of levels, as described by the <levels> argument.')
+                    for j,val in enumerate(p['data'][v_idx]):
+                        lvl_idx = j
+                        darray[v][1][prof_idx][lvl_idx] = val
+
+        ### form coordinates
+        ids = [p['_id'] for p in interpolated_profiles]
+        longitudes = [p['geolocation']['coordinates'][0] for p in interpolated_profiles]
+        latitudes = [p['geolocation']['coordinates'][1] for p in interpolated_profiles]
+        timestamps = [p['timestamp'] for p in interpolated_profiles]
+        timestamps = [parsetime(t) for t in timestamps]
+
     coords = {
         "id": ("nprof", ids),
         "longitude": ("nprof", longitudes),
@@ -773,20 +619,6 @@ def setvar(profile, varname, values, data_info_meta=None):
     p['data_info'][2].append(data_info_meta)
 
     return p
-
-def regional_mean(dxr, form='area'):
-    # given an xarray dataset <dxr> with latitudes and longitudes as dimensions,
-    # calculate the mean of all data variables, weighted by grid cell area
-    weights = numpy.cos(numpy.deg2rad(dxr.latitude))
-    weights.name = "weights"
-    dxr_weighted = dxr.weighted(weights)
-    
-    if form =='area':
-        return dxr_weighted.mean(("longitude", "latitude"))
-    elif form == 'meridional':
-        return dxr_weighted.mean(("latitude"))
-    elif form == 'zonal':
-        return dxr_weighted.mean(("longitude"))
 
 def getvar(variable, data_doc, metadata_doc=None):
     # given a raw data document which includes data_info, try and extract variable as a list.
@@ -819,7 +651,7 @@ class Profile:
 
         self.vars = {}
         for i, name in enumerate(data_info[0]):
-            arr = numpy.asarray(data['data'][i])
+            arr = numpy.asarray(data['data'][i], dtype=float)
             self.vars[name] = arr
         del self._rawdata['data']
 
@@ -843,7 +675,7 @@ class Profile:
 
     @property
     def timestamp(self):
-        return parser.parse(self.rawdata['timestamp'])
+        return parser.parse(self.rawdata['timestamp'], ignoretz=True)
 
     @property
     def longitude(self):
