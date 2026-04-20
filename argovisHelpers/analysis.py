@@ -10,7 +10,7 @@ def MLD_estimate(pressure, var, threshold_delta, reference_pressure=10):
     if numpy.isnan(reference_val):
         return None
     threshold_val = reference_val + threshold_delta
-    print(threshold_val)
+
     ## assume the MLD is in the first 1000 dbar and only look there
     low_i = 0
     high_i = 0
@@ -18,11 +18,12 @@ def MLD_estimate(pressure, var, threshold_delta, reference_pressure=10):
         high_i += 1
         if high_i == len(pressure)-1:
             break
-    print(low_i, high_i)
+
     # inverse pchip interp    
     pchip = scipy.interpolate.PchipInterpolator(pressure[low_i:high_i], var[low_i:high_i], extrapolate=False)
     roots = numpy.asarray(pchip.solve(threshold_val, extrapolate=False), dtype=float)
-    print(roots)
+
+    # it's on you to make sure you're giving it a search range without a zillion roots
     return roots[0]
 
 def AOU_estimate(potential_temperature, salinity, density, oxygen):
@@ -86,6 +87,20 @@ def AOU_estimate(potential_temperature, salinity, density, oxygen):
     if scalar:
         return float(out[0])
     return out
+
+def regional_mean(dxr, form='area'):
+    # given an xarray dataset <dxr> with latitudes and longitudes as dimensions,
+    # calculate the mean of all data variables, weighted by grid cell area
+    weights = numpy.cos(numpy.deg2rad(dxr.latitude))
+    weights.name = "weights"
+    dxr_weighted = dxr.weighted(weights)
+    
+    if form =='area':
+        return dxr_weighted.mean(("longitude", "latitude"))
+    elif form == 'meridional':
+        return dxr_weighted.mean(("latitude"))
+    elif form == 'zonal':
+        return dxr_weighted.mean(("longitude"))
 
 def interpolate_to_levels(levels_raw, var_raw, levels_interp):
     # interpolate <var> to <levels> using PCHIP interpolation
@@ -239,17 +254,3 @@ def interpolate_all(profile, levels):
                 data[i] = list(data[i])
 
         return {**profile, 'data':data, 'data_info':data_info}
-
-def regional_mean(dxr, form='area'):
-    # given an xarray dataset <dxr> with latitudes and longitudes as dimensions,
-    # calculate the mean of all data variables, weighted by grid cell area
-    weights = numpy.cos(numpy.deg2rad(dxr.latitude))
-    weights.name = "weights"
-    dxr_weighted = dxr.weighted(weights)
-    
-    if form =='area':
-        return dxr_weighted.mean(("longitude", "latitude"))
-    elif form == 'meridional':
-        return dxr_weighted.mean(("latitude"))
-    elif form == 'zonal':
-        return dxr_weighted.mean(("longitude"))

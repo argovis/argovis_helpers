@@ -1,6 +1,6 @@
 from argovisHelpers import helpers
 from argovisHelpers import analysis
-import datetime, pytest, numpy
+import datetime, pytest, numpy, scipy, xarray
 
 @pytest.fixture
 def apiroot():
@@ -306,7 +306,7 @@ def test_setgetvar(apiroot, apikey):
     assert helpers.getvar('temperature', p) == [1,2,3,4,5], 'getvar should extract temperature'
     assert helpers.getvar('pressure', p) == [10,20,30,40,50], 'getvar should extract pressure'
     assert helpers.getvar('salinity', p) == [100,200,300,400,500], 'getvar should extract salinity'
-    p = helpers.setvar(p, 'doxy', [6,7,8,9,10], ['mg/L'])
+    p = helpers.setvar(p, 'doxy', [6,7,8,9,10], ['umol/kg'])
     assert helpers.getvar('doxy', p) == [6,7,8,9,10], 'setvar should have successfully posted doxy'
 
 def test_Profile(apiroot, apikey):
@@ -321,14 +321,100 @@ def test_Profile(apiroot, apikey):
     p.setvar('salinity', [100,200,300,400,500])
     assert numpy.allclose(p.getvar('salinity'), [100,200,300,400,500]), 'setvar should have successfully posted salinity'
 
+def test_MLD_estimate(apiroot, apikey):
+    x = [0,1,2,3,4,5]
+    y = [6.25,2.25,0.25,0.25,2.25,6.25]
+
+    root = analysis.MLD_estimate(x, y, threshold_delta=0.03, reference_pressure=3)
+    pchip = scipy.interpolate.PchipInterpolator(x, y, extrapolate=False)
+    assert numpy.isclose(pchip(root), 0.28), 'MLD should be inverting pchip at the right point'
+
+def test_regional_mean_area_constant():
+    lat = [0, 30, 60]
+    lon = [10, 20]
+    data = numpy.full((3, 2), 5.0)
+
+    ds = xarray.Dataset(
+        {"temp": (("latitude", "longitude"), data)},
+        coords={"latitude": lat, "longitude": lon},
+    )
+
+    out = analysis.regional_mean(ds, form="area")
+    assert numpy.isclose(out["temp"].item(), 5.0)
 
 
+def test_regional_mean_area_manual():
+    lat = numpy.array([0.0, 60.0])
+    lon = numpy.array([0.0, 1.0])
+
+    ds = xarray.Dataset(
+        {"temp": (("latitude", "longitude"), numpy.array([[10.0, 11.0], [20.0, 21.0]]))},
+        coords={"latitude": lat, "longitude": lon},
+    )
+
+    out = analysis.regional_mean(ds, form="area")
+
+    weights = numpy.cos(numpy.deg2rad(lat))
+    expected = (10.0 * weights[0] + 11.0 * weights[0] + 20.0 * weights[1] + 21.0 * weights[1]) / (2*weights[0] + 2*weights[1])
+
+    assert numpy.isclose(out["temp"].item(), expected)
 
 
+def test_regional_mean_meridional():
+    lat = numpy.array([0.0, 60.0])
+    lon = numpy.array([0.0, 1.0])
+
+    ds = xarray.Dataset(
+        {"temp": (("latitude", "longitude"), numpy.array([[10.0, 100.0], [20.0, 200.0]]))},
+        coords={"latitude": lat, "longitude": lon},
+    )
+
+    out = analysis.regional_mean(ds, form="meridional")
+
+    weights = numpy.cos(numpy.deg2rad(lat))
+    expected = numpy.array([
+        (10.0 * weights[0] + 20.0 * weights[1]) / (weights[0] + weights[1]),
+        (100.0 * weights[0] + 200.0 * weights[1]) / (weights[0] + weights[1]),
+    ])
+
+    assert out["temp"].dims == ("longitude",)
+    assert numpy.allclose(out["temp"].values, expected)
 
 
-# def test_MLD_estimate(apiroot, apikey):
-#     x = [0,1,2,3,4,5]
-#     y = [6.25,2.25,0.25,0.25,2.25,6.25]
+def test_regional_mean_zonal():
+    lat = numpy.array([0.0, 60.0])
+    lon = numpy.array([0.0, 1.0])
 
-#     assert analysis.MLD_estimate(x,y,threshold_delta=0.03,reference_pressure=3) == 3.02915, 'should find minimum of parabola'
+    ds = xarray.Dataset(
+        {"temp": (("latitude", "longitude"), numpy.array([[10.0, 30.0], [20.0, 40.0]]))},
+        coords={"latitude": lat, "longitude": lon},
+    )
+
+    out = analysis.regional_mean(ds, form="zonal")
+
+    expected = numpy.array([20.0, 30.0]) # no weights since we're averaging inside individual latitude bands
+
+    assert out["temp"].dims == ("latitude",)
+    assert numpy.allclose(out["temp"].values, expected)
+
+
+def test_regional_mean_multiple_variables():
+    lat = [0.0, 60.0]
+    lon = [0.0, 1.0]
+
+    ds = xarray.Dataset(
+        {
+            "temp": (("latitude", "longitude"), numpy.array([[1.0, 2.0], [3.0, 4.0]])),
+            "salt": (("latitude", "longitude"), numpy.array([[10.0, 11.0], [30.0, 31.0]])),
+        },
+        coords={"latitude": lat, "longitude": lon},
+    )
+
+    out = analysis.regional_mean(ds, form="area")
+
+    weights = numpy.cos(numpy.deg2rad(lat))
+    expected_temp = (1.0 * weights[0] + 2.0 * weights[0] + 3.0 * weights[1] + 4.0 * weights[1]) / (2*weights[0] + 2*weights[1])
+    expected_salt = (10.0 * weights[0] + 11.0 * weights[0] + 30.0 * weights[1] + 31.0 * weights[1]) / (2*weights[0] + 2*weights[1])
+
+    assert numpy.isclose(out["temp"].item(), expected_temp)
+    assert numpy.isclose(out["salt"].item(), expected_salt)
