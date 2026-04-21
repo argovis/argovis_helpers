@@ -1,6 +1,6 @@
 from .helpers import Profile
 import scipy.interpolate
-import numpy, numbers, math, copy
+import numpy, numbers, math, copy, gsw
 
 def MLD_estimate(pressure, var, threshold_delta, reference_pressure=10):
     # simple mixed layer depth estimator based on an absolute change in a variable relative to a reference pressure (default 10 dbar)
@@ -51,7 +51,7 @@ def AOU_estimate(potential_temperature, salinity, density, oxygen):
 
     # enforce equal shapes (no broadcasting surprises)
     if not (pt.shape == sa.shape == ro.shape == o2.shape):
-        raise ValueError(f"Inumpyuts must have the same shape; got {pt.shape}, {sa.shape}, {ro.shape}, {o2.shape}")
+        raise ValueError(f"Inputs must have the same shape; got {pt.shape}, {sa.shape}, {ro.shape}, {o2.shape}")
 
     # elementwise validity mask
     valid = numpy.isfinite(pt) & numpy.isfinite(sa) & numpy.isfinite(ro) & numpy.isfinite(o2)
@@ -80,6 +80,7 @@ def AOU_estimate(potential_temperature, salinity, density, oxygen):
           + sav*(B0 + B1*Ts + B2*(Ts**2) + B3*(Ts**3))
           + C0*(sav**2))
 
+    print('o2sol:', (1000/22.3916)*numpy.exp(l))
     O2_eq_mmol_per_m3 = (1000/22.3916) * numpy.exp(l)
     O2_eq_umol_per_kg = O2_eq_mmol_per_m3 * rov / 1000
     out[valid] = O2_eq_umol_per_kg - o2v
@@ -87,6 +88,23 @@ def AOU_estimate(potential_temperature, salinity, density, oxygen):
     if scalar:
         return float(out[0])
     return out
+
+def AOU_estimate_gsw(SA, CT, p, lon, lat, oxygen):
+
+    o2sol = gsw.O2sol(SA, CT, p, lon, lat)
+    print('o2sol:', o2sol)
+    O2_eq_umol_per_kg = o2sol * gsw.rho(SA, CT, p) / 1000
+
+    return O2_eq_umol_per_kg - oxygen
+
+# def AOU_estimate_gsw(potential_temperature, salinity, oxygen, p, lon, lat):
+#     o2sol = gsw.O2sol_SP_pt(salinity, potential_temperature)
+#     print('o2sol:', o2sol)
+#     SA = gsw.SA_from_SP(salinity, p, lon, lat)
+#     CT = gsw.CT_from_pt(SA, potential_temperature)
+#     O2_eq_umol_per_kg = o2sol * gsw.rho(SA, CT, p) / 1000
+
+    return O2_eq_umol_per_kg - oxygen
 
 def regional_mean(dxr, form='area'):
     # given an xarray dataset <dxr> with latitudes and longitudes as dimensions,
