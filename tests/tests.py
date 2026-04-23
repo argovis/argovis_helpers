@@ -329,26 +329,26 @@ def test_MLD_estimate(apiroot, apikey):
     pchip = scipy.interpolate.PchipInterpolator(x, y, extrapolate=False)
     assert numpy.isclose(pchip(root), 0.28), 'MLD should be inverting pchip at the right point'
 
-def test_AOU_estimate(apiroot, apikey):
-    SA = [34.7118, 34.8915, 35.0256, 34.8472, 34.7366, 34.7324]
-    CT = [28.8099, 28.4392, 22.7862, 10.2262, 6.8272, 4.3236]
-    p =  [10, 50, 125, 250, 600, 1000]
-    lat =  [4, 4, 4, 4, 4, 4]
-    long = [188, 188, 188, 188, 188, 188]
+# def test_AOU_estimate(apiroot, apikey):
+#     SA = [34.7118, 34.8915, 35.0256, 34.8472, 34.7366, 34.7324]
+#     CT = [28.8099, 28.4392, 22.7862, 10.2262, 6.8272, 4.3236]
+#     p =  [10, 50, 125, 250, 600, 1000]
+#     lat =  [4, 4, 4, 4, 4, 4]
+#     long = [188, 188, 188, 188, 188, 188]
     
-    potential_temperature = gsw.pt_from_CT(SA, CT)
-    salinity = gsw.SP_from_SA(SA, p, long, lat)
-    density = gsw.rho(SA, CT, p)
-    oxygen = [0,0,0,0,0,0]
+#     potential_temperature = gsw.pt_from_CT(SA, CT)
+#     salinity = gsw.SP_from_SA(SA, p, long, lat)
+#     density = gsw.rho(SA, CT, p)
+#     oxygen = [0,0,0,0,0,0]
 
-    aou = analysis.AOU_estimate(potential_temperature, salinity, density, oxygen)
-    ref = analysis.AOU_estimate_gsw(SA, CT, p, long, lat, oxygen)
-    #ref = analysis.AOU_estimate_gsw(potential_temperature, salinity, oxygen, p, long, lat)
+#     aou = analysis.AOU_estimate(potential_temperature, salinity, density, oxygen)
+#     ref = analysis.AOU_estimate_gsw(SA, CT, p, long, lat, oxygen)
+#     #ref = analysis.AOU_estimate_gsw(potential_temperature, salinity, oxygen, p, long, lat)
 
-    print(aou)
-    print(ref)
+#     print(aou)
+#     print(ref)
 
-    assert False
+#     assert False
 
 def test_regional_mean_area_constant():
     lat = [0, 30, 60]

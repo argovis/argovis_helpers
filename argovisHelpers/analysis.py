@@ -6,21 +6,15 @@ def MLD_estimate(pressure, var, threshold_delta, reference_pressure=10):
     # simple mixed layer depth estimator based on an absolute change in a variable relative to a reference pressure (default 10 dbar)
     # suggested variable / threshold deltas:
     # potential density / 0.03 kg/m3
+    # note this implementation assumes there is only one threshold crossing; if there are multiple, it will return the shallowest one
+    
     reference_val = interpolate_to_levels(pressure, var, [reference_pressure])[0][0]
     if numpy.isnan(reference_val):
         return None
     threshold_val = reference_val + threshold_delta
 
-    ## assume the MLD is in the first 1000 dbar and only look there
-    low_i = 0
-    high_i = 0
-    while pressure[high_i] < 1000:
-        high_i += 1
-        if high_i == len(pressure)-1:
-            break
-
     # inverse pchip interp    
-    pchip = scipy.interpolate.PchipInterpolator(pressure[low_i:high_i], var[low_i:high_i], extrapolate=False)
+    pchip = scipy.interpolate.PchipInterpolator(pressure, var, extrapolate=False)
     roots = numpy.asarray(pchip.solve(threshold_val, extrapolate=False), dtype=float)
 
     # it's on you to make sure you're giving it a search range without a zillion roots
