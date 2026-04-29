@@ -17,10 +17,10 @@ def MLD_estimate(pressure, var, threshold_delta, reference_pressure=10):
     # potential density / 0.03 kg/m3
     # note this implementation assumes there is only one threshold crossing; if there are multiple, it will return the shallowest one
 
-    reference_val, flag = interpolate_to_levels(pressure, var, [reference_pressure])[0]
+    reference_val, flag = interpolate_to_levels(pressure, var, [reference_pressure])
     if numpy.isnan(reference_val):
         return None, flag
-    threshold_val = reference_val + threshold_delta
+    threshold_val = reference_val[0] + threshold_delta
 
     # clean up input data
     pressure, variable, flag = tidy_profile(pressure, var, flag)
@@ -252,7 +252,7 @@ def interpolate_all(profile, levels):
         p.setvar('pressure', levels)
         for v in variables:
             if v in datavecs and v != 'pressure':
-                i = interpolate_to_levels(pressure, profile.getvar(v), levels)
+                i, _ = interpolate_to_levels(pressure, profile.getvar(v), levels)
                 p.delvar(v)
                 p.setvar(v, i[0])
             else:
