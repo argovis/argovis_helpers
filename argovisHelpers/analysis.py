@@ -1,3 +1,12 @@
+# flag table:
+# 1: degenerate adjacent levels
+# 2: levels in reverse order
+# 4: variable of interest was NaN, masked
+# 8: levels non-monotonic, had to sort
+# 16: pressure was NaN, masked
+# 32: insufficient levels for cacluation (interpolation or otherwise)
+# 512: no threshold crossing found in MLD estimation
+
 from .helpers import Profile
 import scipy.interpolate
 import numpy, numbers, math, copy, gsw
@@ -7,18 +16,28 @@ def MLD_estimate(pressure, var, threshold_delta, reference_pressure=10):
     # suggested variable / threshold deltas:
     # potential density / 0.03 kg/m3
     # note this implementation assumes there is only one threshold crossing; if there are multiple, it will return the shallowest one
-    
-    reference_val = interpolate_to_levels(pressure, var, [reference_pressure])[0][0]
+
+    reference_val, flag = interpolate_to_levels(pressure, var, [reference_pressure])[0]
     if numpy.isnan(reference_val):
-        return None
+        return None, flag
     threshold_val = reference_val + threshold_delta
+
+    # clean up input data
+    pressure, variable, flag = tidy_profile(pressure, var, flag)
+    # ROI must contain at least two points for Pchip
+    if len(pressure) < 2:
+        flag = flag | 32
+        return [None], flag
 
     # inverse pchip interp    
     pchip = scipy.interpolate.PchipInterpolator(pressure, var, extrapolate=False)
     roots = numpy.asarray(pchip.solve(threshold_val, extrapolate=False), dtype=float)
 
     # it's on you to make sure you're giving it a search range without a zillion roots
-    return roots[0]
+    if len(roots) > 0 and not numpy.isnan(roots[0]):
+        return roots[0], 0
+    else:
+        return None, 512
 
 def AOU_estimate(potential_temperature, salinity, density, oxygen):
     # function to compute AOU in umol/kg
@@ -140,12 +159,6 @@ def is_numeric(x):
 
 def tidy_profile(pressure, var, flag):
     # pchip needs pressures to be monotonically increasing; also need the dependent variable to always be defined
-    # flags (little endian):
-    # 1: degenerate adjacent levels
-    # 2: levels in reverse order
-    # 4: variable of interest was NaN, masked
-    # 8: levels non-monotonic, had to sort
-    # 16: pressure was NaN, masked
 
     ## dependent variable must be defined
     mask = [0]*len(var)
