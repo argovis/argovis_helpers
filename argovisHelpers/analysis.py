@@ -254,7 +254,7 @@ def interpolate_all(profile, levels):
             if v in datavecs and v != 'pressure':
                 i, _ = interpolate_to_levels(pressure, profile.getvar(v), levels)
                 p.delvar(v)
-                p.setvar(v, i[0])
+                p.setvar(v, i)
             else:
                 p.delvar(v)
         return p       
