@@ -327,7 +327,7 @@ def test_MLD_estimate(apiroot, apikey):
 
     root = analysis.MLD_estimate(x, y, threshold_delta=0.03, reference_pressure=3)
     pchip = scipy.interpolate.PchipInterpolator(x, y, extrapolate=False)
-    assert numpy.isclose(pchip(root), 0.28), 'MLD should be inverting pchip at the right point'
+    assert numpy.isclose(pchip(root)[0], 0.28), 'MLD should be inverting pchip at the right point'
 
 # def test_AOU_estimate(apiroot, apikey):
 #     SA = [34.7118, 34.8915, 35.0256, 34.8472, 34.7366, 34.7324]
