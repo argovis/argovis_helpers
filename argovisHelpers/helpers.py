@@ -651,7 +651,7 @@ class Profile:
 
         self.vars = {}
         for i, name in enumerate(data_info[0]):
-            arr = numpy.asarray(data['data'][i], dtype=float)
+            arr = numpy.ma.masked_invalid(numpy.array(data['data'][i], dtype=float))
             self.vars[name] = arr
         del self._rawdata['data']
 
@@ -700,11 +700,14 @@ class Profile:
     def hasvar(self, name):
         return name in self.vars
 
-    def getvar(self, name):
-        return self.vars.get(name)
+    def getvar(self, name, preserve_mask=False):
+        if preserve_mask:
+            return self.vars.get(name)
+        else:
+            return self.vars.get(name).filled(numpy.nan) if name in self.vars else None
 
-    def setvar(self, name, values):
-        arr = numpy.ma.masked_array(values) 
+    def setvar(self, name, values, mask=None):
+        arr = numpy.ma.masked_array(values, mask=mask, dtype=float) 
         if arr.ndim != 1:
             raise ValueError(f"Variable {name!r} must be 1D, got shape {arr.shape}")
         self.vars[name] = arr

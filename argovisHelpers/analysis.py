@@ -27,15 +27,19 @@ def MLD_estimate(pressure, var, threshold_delta, reference_pressure=10):
     # ROI must contain at least two points for Pchip
     if len(pressure) < 2:
         flag = flag | 32
-        return [None], flag
+        return None, flag
 
     # inverse pchip interp    
-    pchip = scipy.interpolate.PchipInterpolator(pressure, var, extrapolate=False)
+    pchip = scipy.interpolate.PchipInterpolator(pressure, variable, extrapolate=False)
     roots = numpy.asarray(pchip.solve(threshold_val, extrapolate=False), dtype=float)
 
     # it's on you to make sure you're giving it a search range without a zillion roots
     if len(roots) > 0 and not numpy.isnan(roots[0]):
-        return roots[0], 0
+        # return the first root > reference pressure
+        roots.sort()
+        for r in roots:
+            if r > reference_pressure:
+                return r, flag
     else:
         return None, 512
 
@@ -47,7 +51,8 @@ def AOU_estimate(SA, CT, p, lon, lat, oxygen):
     o2sol = gsw.O2sol(SA, CT, p, lon, lat)
     O2_eq_umol_per_kg = o2sol * gsw.rho(SA, CT, p) / 1000
 
-    return O2_eq_umol_per_kg - oxygen
+    return O2_eq_umol_per_kg - oxygen, 0 # no flagging implemented but let's match MLD
+
 
 def regional_mean(dxr, form='area'):
     # given an xarray dataset <dxr> with latitudes and longitudes as dimensions,
@@ -178,8 +183,6 @@ def interpolate_all(profile, levels):
         datavecs = [x for x in variables if 'qc' not in x] # don't interpolate QC; a bit duck-typie...
         pressure = profile.getvar('pressure')
         p = copy.deepcopy(profile)
-        p.delvar('pressure')
-        p.setvar('pressure', levels)
         for v in variables:
             if v in datavecs and v != 'pressure':
                 i, _ = interpolate_to_levels(pressure, profile.getvar(v), levels)
@@ -187,6 +190,7 @@ def interpolate_all(profile, levels):
                 p.setvar(v, i)
             else:
                 p.delvar(v)
+        p.setvar('pressure', levels)
         return p       
     else:
         ## remove any QC vectors
@@ -206,6 +210,6 @@ def interpolate_all(profile, levels):
                 data[i] = levels
             else:
                 data[i], _ = interpolate_to_levels(raw_levels, data[i], levels)
-                data[i] = list(data[i])
+                data[i] = data[i].filled(numpy.nan)
 
         return {**profile, 'data':data, 'data_info':data_info}
