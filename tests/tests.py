@@ -37,19 +37,19 @@ def test_argofetch_404(apiroot, apikey):
     profile = helpers.argofetch('/argo', options={'startDate':'2072-02-01T00:00:00Z', 'endDate':'2072-02-02T00:00:00Z'}, apikey=apikey, apiroot=apiroot)[0]
     assert profile == []
 
-# def test_bulky_fetch(apiroot, apikey):
-#     '''
-#     make sure argofetch handles rapid requests for the whole globe reasonably
-#     '''
+def test_bulky_fetch(apiroot, apikey):
+    '''
+    make sure argofetch handles rapid requests for the whole globe reasonably
+    '''
 
-#     result = []
-#     delay = 0
-#     for i in range(3):
-#         request = helpers.argofetch('/grids/rg09', options={'startDate': '2004-01-01T00:00:00Z', 'endDate': '2004-02-01T00:00:00Z', 'data':'rg09_temperature'}, apikey='regular', apiroot=apiroot)
-#         result += request[0]
-#         delay += request[1]
-#     assert len(result) == 60, 'should have found 20x3 grid docs'
-#     assert delay > 0, 'should have experienced at least some rate limiter delay'
+    result = []
+    delay = 0
+    for i in range(3):
+        request = helpers.argofetch('/grids/rg09', options={'startDate': '2004-01-01T00:00:00Z', 'endDate': '2004-02-01T00:00:00Z', 'data':'rg09_temperature'}, apikey='regular', apiroot=apiroot)
+        result += request[0]
+        delay += request[1]
+    assert len(result) == 60, 'should have found 20x3 grid docs'
+    assert delay > 0, 'should have experienced at least some rate limiter delay'
 
 def test_polygon(apiroot, apikey):
     '''
@@ -324,20 +324,20 @@ def test_Profile(apiroot, apikey):
     assert numpy.allclose(p.getvar('salinity'), [100,200,300,400,500]), 'setvar should have successfully posted salinity'
 
 def test_MLD_estimate(apiroot, apikey):
-    x = [0,1,2,3,4,5]
-    y = [6.25,2.25,0.25,0.25,2.25,6.25]
+    x = [0,1,2,3,4,5,6,7]
+    y = [6.25,2.25,0.25,0.25,2.25,6.25,12.25,20.25]
 
     root = analysis.MLD_estimate(x, y, threshold_delta=0.03, reference_pressure=3)
     pchip = scipy.interpolate.PchipInterpolator(x, y, extrapolate=False)
     assert numpy.isclose(pchip(root)[0], 0.28), 'MLD should be inverting pchip at the right point'
 
 def test_MLD_mask(apiroot, apikey):
-    x = [0,1,2,3,4,5]
-    y = numpy.ma.masked_array([6.25,2.25,0.25,0.25,2.25,6.25], [False, False, False, False, False, True])
+    x = [0,1,2,3,4,5,6,7]
+    y = numpy.ma.masked_array([6.25,2.25,0.25,0.25,2.25,6.25,12.25,20.25], [False, False, False, False, False, False, False, True])
 
     root = analysis.MLD_estimate(x, y, threshold_delta=0.03, reference_pressure=3)
     pchip = scipy.interpolate.PchipInterpolator(x, y, extrapolate=False)
-    assert numpy.isclose(pchip(root)[0], 0.28), 'MLD shouldnt be thrown off by a masked value'
+    assert numpy.isclose(pchip(root)[0], 0.28), 'MLD shouldnt be thrown off by a masked value far away'
 
 def test_AOU_estimate(apiroot, apikey):
     SA = [34.7118, 34.8915, 35.0256, 34.8472, 34.7366, 34.7324]
