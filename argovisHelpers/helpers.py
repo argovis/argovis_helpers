@@ -250,8 +250,7 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
         if option in options:
             options[option] = str(options[option])
 
-    try:
-        vsn = version("argovisHelpers")
+    vsn = version("argovisHelpers")
     dl = requests.get(apiroot.rstrip('/') + '/' + route.lstrip('/'), params = options, headers={'x-argokey': apikey, 'x-avh-telemetry': vsn})
     statuscode = dl.status_code
     if verbose:
