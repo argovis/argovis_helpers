@@ -1,5 +1,6 @@
 from argovisHelpers import helpers
-import datetime, pytest
+from argovisHelpers import analysis
+import datetime, pytest, numpy, scipy, xarray, gsw
 
 @pytest.fixture
 def apiroot():
@@ -210,3 +211,240 @@ def test_big_time_slice(apiroot, apikey):
     print(response)
     assert len(response) == 0, 'query should run to completion with no result'
 
+def test_mask_far_interps():
+
+    insitu_pres = numpy.array([0.,1.,2.,3.,4.,5.,6.,7.,8.,9.,15.])
+    interp_pres = numpy.array([4.5, 25, 25.1]) # note its not this function's job to disqualify levels outside of the range of measurements, only interpolated levels that don't have a close neighbor.
+    interp_vals = numpy.array([0.,1.,2.])
+
+    assert numpy.allclose(analysis.mask_far_interps(insitu_pres, interp_pres, interp_vals), [0,1,numpy.nan],equal_nan=True), 'basic mask'
+
+def test_interpolate_to_levels():
+
+    profile_levels = [1,2,3,4,5]
+    profile_temperature = [10,20,30,40,50]
+    degen_levels = [1,1,3,4,5]
+
+    assert numpy.allclose(analysis.interpolate_to_levels(profile_levels, profile_temperature, [1.5,2.5,3.5,4.5])[0], [15,25,35,45]), 'basic interp'
+    assert numpy.allclose(analysis.interpolate_to_levels(profile_levels, profile_temperature, [1.5,2.5,3.5,4.5])[1], 0), 'basic interp flagging'
+    assert numpy.allclose(analysis.interpolate_to_levels(profile_levels, profile_temperature, [2,4,6])[0], [20,40, numpy.nan], equal_nan=True), 'dont run off end of insitu data'
+    assert numpy.allclose(analysis.interpolate_to_levels(profile_levels, profile_temperature, [0.9999,2,4])[0], [numpy.nan,20,40], equal_nan=True), 'dont run off start of insitu data'
+    assert numpy.allclose(analysis.interpolate_to_levels(degen_levels, profile_temperature, [2,4,6])[0], [numpy.nan,40,numpy.nan], equal_nan=True), 'degenerate profile'
+    assert numpy.allclose(analysis.interpolate_to_levels(degen_levels, profile_temperature, [2,4,6])[1], 1), 'degenerate profile flagging'
+
+def test_profile_is_empty():
+    mock_data_info = [['a', 'pressure', 'b'],[],[]]
+
+    assert helpers.profile_is_empty([[],[],[]], mock_data_info) == True, 'profile empty'
+    assert helpers.profile_is_empty([[],[1,2,3],[]], mock_data_info) == True, 'profile empty other than pressure'
+    assert helpers.profile_is_empty([[numpy.nan,numpy.nan,numpy.nan],[1,2,3],[]], mock_data_info) == True, 'nans count as empty'
+    assert helpers.profile_is_empty([[None,None,None],[1,2,3],[]], mock_data_info) == True, 'Nones count as empty'
+    assert helpers.profile_is_empty([[numpy.nan, numpy.nan],[1,2],[10,20]], mock_data_info) == False, 'data should pass even if some vectors are empty'
+    assert helpers.profile_is_empty([['xyz', numpy.nan],[1,2],[10,20]], mock_data_info) == False, 'strings count as not empty'
+    assert helpers.profile_is_empty([[numpy.nan, 2], [1,2], [None,None]], mock_data_info) == False, 'partially nan vector should pass'
+
+def test_tidy_profile():
+    assert analysis.tidy_profile([1,2,3,3,4], [6,7,8,9,10], 0) == ([1,2,4], [6,7,10], 1), 'mask degen neighbors'
+    assert analysis.tidy_profile([6,5,4,3],[2,5,3,4], 0) == ([3,4,5,6], [4,3,5,2], 2), 'levels in reverse order'
+    assert analysis.tidy_profile([1,2,4,3,5], [6,1,4,2,9], 0) == ([1,2,3,4,5], [6,1,2,4,9], 8), 'levels out of order'
+
+def test_interpolate_all(apiroot, apikey):
+
+    # basics
+    p = {'data': [[1,2,3,4,5], [10,20,30,40,50], [100,200,300,400,500]], 'data_info': [['temperature','pressure','salinity'],[],[]]}
+    interpolated_profile = analysis.interpolate_all(p, [15,25,35,45])
+    assert numpy.allclose(interpolated_profile['data'][0], [1.5,2.5,3.5,4.5]), 'interpolated temperature'
+    assert numpy.allclose(interpolated_profile['data'][1], [15,25,35,45]), 'unchanged pressure'
+    assert numpy.allclose(interpolated_profile['data'][2], [150,250,350,450]), 'interpolated salinity'
+
+    # on a more realistic profile
+    p = helpers.queryProfile('/argo', options={'id':'13857_068', 'data':'pressure,temperature'}, apikey=apikey, apiroot=apiroot)
+    interp_p = analysis.interpolate_all(p[0], helpers.rg_levels())
+    assert numpy.ma.allequal(interp_p.getvar('temperature')[0:5], numpy.ma.masked_array([None, None, 27.97794242903443, 27.969, 27.969], [True, True, False, False, False]))
+    assert 'pressure' in interp_p.variable_names(), 'pressure should still be a variable after interpolation'
+    assert numpy.ma.allequal(interp_p.getvar('pressure')[0:5], helpers.rg_levels()[0:5]), 'pressure should be unchanged by interpolation'
+
+
+def test_queryGrid(apiroot, apikey):
+    datagrid = helpers.queryGrid('/grids/rg09', options={'startDate': '2004-01-01T00:00:00Z', 'endDate': '2004-02-01T00:00:00Z', 'data':'rg09_temperature'}, apikey=apikey, apiroot=apiroot)
+
+    assert datagrid.sizes['longitude'] == 20, 'test data has 20 longitude points'
+    assert datagrid.sizes['latitude'] == 1, 'test data has 1 latitude point'
+    assert numpy.allclose(datagrid['rg09_temperature'].sel(longitude=20.5).data, [-0.033,-0.076,-0.21,-0.593,-1.201,-1.598,-1.663,-1.569,-1.15,-0.603,-0.134,0.262,0.6,0.861,1.057,1.184,1.249,1.259,1.279,1.307,1.315,1.329,1.342,1.349,1.345,1.33,1.309,1.284,1.263,1.245,1.224,1.203,1.175,1.127,1.07,1.013,0.955,0.896,0.843,0.792,0.748,0.7,0.661,0.621,0.584,0.549,0.52,0.489,0.464,0.441,0.415,0.383,0.356,0.309,0.265,0.219,0.175,0.128]), 'should be able to extract expected data'
+
+def test_sort_and_dedupe(apiroot, apikey):
+    assert helpers.sort_and_dedupe([5,4,3,2,1]) == [1,2,3,4,5], 'should sort list'
+    assert helpers.sort_and_dedupe([1,2,3,4,5]) == [1,2,3,4,5], 'shouldnt mess with already sorted list'
+    assert helpers.sort_and_dedupe([1,2,2,3,4]) == [1,2,3,4], 'should remove duplicates'
+    assert helpers.sort_and_dedupe([5,5,5,5]) == [5], 'should handle all duplicates'
+    assert helpers.sort_and_dedupe([[1,2],[1,2],[2,5],[0,4]]) == [[0,4],[1,2],[2,5]], 'should sort by first element in list of lists'
+
+def test_queryProfile(apiroot, apikey):
+    profiles = helpers.queryProfile('/argo', options={'id': '13857_068', 'data':'pressure,temperature'}, apikey=apikey, apiroot=apiroot)
+
+    assert profiles[0].longitude == -26.257, 'longitude should be -26.257'
+    assert profiles[0].latitude == 3.427, 'latitude should be 3.427'
+    assert profiles[0].timestamp == datetime.datetime(2022, 2, 1, 19, 3, 42, 2000), 'timestamp incorrect'
+    assert profiles[0].variable_names() == ('pressure','temperature'), 'variable names incorrect'
+    assert numpy.all(profiles[0].getvar('temperature')[0:5] == [28.021,28,27.969,27.969,27.969]), 'temperature data should be correct'
+    
+def test_build_dataset(apiroot,apikey):
+    # on Profile objects:
+    profiles = helpers.queryProfile('/cchdo', options={'startDate':'1996-01-01T00:00:00Z', 'endDate':'1997-01-01T00:00:00Z', 'data':'pressure,doxy'}, apikey=apikey, apiroot=apiroot)
+    interp_profiles = [analysis.interpolate_all(p, helpers.rg_levels()) for p in profiles]
+    ds = helpers.build_dataset(interp_profiles, helpers.rg_levels())
+    assert len(interp_profiles) == ds.sizes['nprof']
+    assert numpy.allclose(ds.isel(nprof=0)['doxy'].data, interp_profiles[0].getvar('doxy'), equal_nan=True), 'data shouldnt get mangled on conversion to dataset'
+
+    # on raw docs:
+    profiles = helpers.query('/cchdo', options={'startDate':'1996-01-01T00:00:00Z', 'endDate':'1997-01-01T00:00:00Z', 'data':'pressure,doxy'}, apikey=apikey, apiroot=apiroot)
+    interp_profiles = [analysis.interpolate_all(p, helpers.rg_levels()) for p in profiles]
+    ds = helpers.build_dataset(interp_profiles, helpers.rg_levels())
+    assert len(interp_profiles) == ds.sizes['nprof']
+    assert numpy.allclose(ds.isel(nprof=0)['doxy'].data, helpers.getvar('doxy', interp_profiles[0]), equal_nan=True), 'data shouldnt get mangled on conversion to dataset'
+
+def test_setgetvar(apiroot, apikey):
+    p = {'data': [[1,2,3,4,5], [10,20,30,40,50], [100,200,300,400,500]], 'data_info': [['temperature','pressure','salinity'],['units'],[['C','dbar','psu']]]}
+    assert helpers.getvar('temperature', p) == [1,2,3,4,5], 'getvar should extract temperature'
+    assert helpers.getvar('pressure', p) == [10,20,30,40,50], 'getvar should extract pressure'
+    assert helpers.getvar('salinity', p) == [100,200,300,400,500], 'getvar should extract salinity'
+    p = helpers.setvar(p, 'doxy', [6,7,8,9,10], ['umol/kg'])
+    assert helpers.getvar('doxy', p) == [6,7,8,9,10], 'setvar should have successfully posted doxy'
+
+def test_Profile(apiroot, apikey):
+    p = helpers.query('/argo', options={'id': '13857_068', 'data':'pressure,temperature'}, apikey=apikey, apiroot=apiroot)[0]
+    p = helpers.Profile(p)
+    assert p.id == '13857_068', 'Profile should have correct id'
+    assert p.longitude == -26.257, 'Profile should have correct longitude'
+    assert p.latitude == 3.427, 'Profile should have correct latitude'
+    assert p.timestamp == datetime.datetime(2022, 2, 1, 19, 3, 42, 2000), 'Profile should have correct timestamp'
+    assert numpy.allclose(p.getvar('pressure')[0:5], [11.9, 17, 22.1, 27.200001, 32.299999]), 'getvar should extract pressure'
+    assert numpy.allclose(p.getvar('temperature')[0:5], [28.021, 28, 27.969, 27.969, 27.969]), 'getvar should extract temperature'
+    p.setvar('salinity', [100,200,300,400,500])
+    assert numpy.allclose(p.getvar('salinity'), [100,200,300,400,500]), 'setvar should have successfully posted salinity'
+
+def test_MLD_estimate(apiroot, apikey):
+    x = [0,1,2,3,4,5,6,7]
+    y = [6.25,2.25,0.25,0.25,2.25,6.25,12.25,20.25]
+
+    root = analysis.MLD_estimate(x, y, threshold_delta=0.03, reference_pressure=3)
+    pchip = scipy.interpolate.PchipInterpolator(x, y, extrapolate=False)
+    assert numpy.isclose(pchip(root)[0], 0.28), 'MLD should be inverting pchip at the right point'
+
+def test_MLD_mask(apiroot, apikey):
+    x = [0,1,2,3,4,5,6,7]
+    y = numpy.ma.masked_array([6.25,2.25,0.25,0.25,2.25,6.25,12.25,20.25], [False, False, False, False, False, False, False, True])
+
+    root = analysis.MLD_estimate(x, y, threshold_delta=0.03, reference_pressure=3)
+    pchip = scipy.interpolate.PchipInterpolator(x, y, extrapolate=False)
+    assert numpy.isclose(pchip(root)[0], 0.28), 'MLD shouldnt be thrown off by a masked value far away'
+
+def test_AOU_estimate(apiroot, apikey):
+    SA = [34.7118, 34.8915, 35.0256, 34.8472, 34.7366, 34.7324]
+    CT = [28.8099, 28.4392, 22.7862, 10.2262, 6.8272, 4.3236]
+    p =  [10, 50, 125, 250, 600, 1000]
+    lat =  [4, 4, 4, 4, 4, 4]
+    long = [188, 188, 188, 188, 188, 188]
+    
+    potential_temperature = gsw.pt_from_CT(SA, CT)
+    salinity = gsw.SP_from_SA(SA, p, long, lat)
+    density = gsw.rho(SA, CT, p)
+    oxygen = [0,0,0,0,0,0]
+
+    ref, _ = analysis.AOU_estimate(SA, CT, p, long, lat, oxygen)
+
+    # simple stationary test
+    o2sol = gsw.O2sol(SA, CT, p, long, lat)
+    O2_eq_umol_per_kg = o2sol * gsw.rho(SA, CT, p) / 1000
+
+    assert numpy.allclose(ref, O2_eq_umol_per_kg)
+
+def test_regional_mean_area_constant():
+    lat = [0, 30, 60]
+    lon = [10, 20]
+    data = numpy.full((3, 2), 5.0)
+
+    ds = xarray.Dataset(
+        {"temp": (("latitude", "longitude"), data)},
+        coords={"latitude": lat, "longitude": lon},
+    )
+
+    out = analysis.regional_mean(ds, form="area")
+    assert numpy.isclose(out["temp"].item(), 5.0)
+
+
+def test_regional_mean_area_manual():
+    lat = numpy.array([0.0, 60.0])
+    lon = numpy.array([0.0, 1.0])
+
+    ds = xarray.Dataset(
+        {"temp": (("latitude", "longitude"), numpy.array([[10.0, 11.0], [20.0, 21.0]]))},
+        coords={"latitude": lat, "longitude": lon},
+    )
+
+    out = analysis.regional_mean(ds, form="area")
+
+    weights = numpy.cos(numpy.deg2rad(lat))
+    expected = (10.0 * weights[0] + 11.0 * weights[0] + 20.0 * weights[1] + 21.0 * weights[1]) / (2*weights[0] + 2*weights[1])
+
+    assert numpy.isclose(out["temp"].item(), expected)
+
+
+def test_regional_mean_meridional():
+    lat = numpy.array([0.0, 60.0])
+    lon = numpy.array([0.0, 1.0])
+
+    ds = xarray.Dataset(
+        {"temp": (("latitude", "longitude"), numpy.array([[10.0, 100.0], [20.0, 200.0]]))},
+        coords={"latitude": lat, "longitude": lon},
+    )
+
+    out = analysis.regional_mean(ds, form="meridional")
+
+    weights = numpy.cos(numpy.deg2rad(lat))
+    expected = numpy.array([
+        (10.0 * weights[0] + 20.0 * weights[1]) / (weights[0] + weights[1]),
+        (100.0 * weights[0] + 200.0 * weights[1]) / (weights[0] + weights[1]),
+    ])
+
+    assert out["temp"].dims == ("longitude",)
+    assert numpy.allclose(out["temp"].values, expected)
+
+
+def test_regional_mean_zonal():
+    lat = numpy.array([0.0, 60.0])
+    lon = numpy.array([0.0, 1.0])
+
+    ds = xarray.Dataset(
+        {"temp": (("latitude", "longitude"), numpy.array([[10.0, 30.0], [20.0, 40.0]]))},
+        coords={"latitude": lat, "longitude": lon},
+    )
+
+    out = analysis.regional_mean(ds, form="zonal")
+
+    expected = numpy.array([20.0, 30.0]) # no weights since we're averaging inside individual latitude bands
+
+    assert out["temp"].dims == ("latitude",)
+    assert numpy.allclose(out["temp"].values, expected)
+
+
+def test_regional_mean_multiple_variables():
+    lat = [0.0, 60.0]
+    lon = [0.0, 1.0]
+
+    ds = xarray.Dataset(
+        {
+            "temp": (("latitude", "longitude"), numpy.array([[1.0, 2.0], [3.0, 4.0]])),
+            "salt": (("latitude", "longitude"), numpy.array([[10.0, 11.0], [30.0, 31.0]])),
+        },
+        coords={"latitude": lat, "longitude": lon},
+    )
+
+    out = analysis.regional_mean(ds, form="area")
+
+    weights = numpy.cos(numpy.deg2rad(lat))
+    expected_temp = (1.0 * weights[0] + 2.0 * weights[0] + 3.0 * weights[1] + 4.0 * weights[1]) / (2*weights[0] + 2*weights[1])
+    expected_salt = (10.0 * weights[0] + 11.0 * weights[0] + 30.0 * weights[1] + 31.0 * weights[1]) / (2*weights[0] + 2*weights[1])
+
+    assert numpy.isclose(out["temp"].item(), expected_temp)
+    assert numpy.isclose(out["salt"].item(), expected_salt)

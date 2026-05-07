@@ -1,9 +1,13 @@
-import requests, datetime, copy, time, re, area, math, urllib, json
+from __future__ import annotations
+import requests, datetime, copy, time, re, area, math, urllib, json, xarray, numpy, scipy.interpolate, gsw
 from shapely.geometry import shape, box, Polygon
 from shapely.ops import orient
-import geopandas as gpd
 import pkg_resources
 from pkg_resources import DistributionNotFound
+from dataclasses import dataclass, field
+from typing import Any
+from dateutil import parser
+from collections.abc import Sequence
 
 _avhcache = {}
 _CACHE_EXPIRY = 3600
@@ -86,7 +90,7 @@ def slice_timesteps(options, r):
     else:
         end = get_timebound(r, 'endDate')
         
-    delta = datetime.timedelta(days=timestep)
+    delta = datetime.datetime.timedelta(days=timestep)
     times = [start]
     while times[-1] + delta < end:
         times.append(times[-1]+delta)
@@ -372,3 +376,341 @@ def query(route, options={}, apikey='', apiroot='https://argovis-api.colorado.ed
 
     return results
 
+def sort_and_dedupe(data):
+    # given a list <data> that may either be floats or lists of floats, 
+    # deduplicate the outer list and sort it either by value or by first element as appropriate.
+    def sort_key(x):
+        return x[0] if isinstance(x, (list, tuple)) else x
+
+    seen = set()
+    out = []
+
+    for x in data:
+        dedupe_key = x if not isinstance(x, (list, tuple)) else tuple(x)
+        if dedupe_key not in seen:
+            seen.add(dedupe_key)
+            out.append(x)
+
+    return sorted(out, key=sort_key)
+
+def queryGrid(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', verbose=False):
+    # perform a search exactly as query(...) on a grid or timeseries route,
+    # and munge the results into an xarray.Dataset
+    
+    ## fetch raw data from Argovis
+    griddata = query(route, options=options, apikey=apikey, apiroot=apiroot, verbose=verbose)
+    gridmeta = query(route, options={**options, 'batchmeta':True}, apikey=apikey, apiroot=apiroot, verbose=verbose)
+    metalookup = {x['_id']: x for x in gridmeta}
+
+    ## is this a grid or a timeseries?
+    isGrid = False
+    isTS = False
+    if 'levels' in gridmeta[0]:
+        isGrid = True
+    elif 'timeseries' in gridmeta[0]:
+        isTS = True
+    if not isGrid and not isTS:
+        raise Exception('Use this function to search for gridded and timeseries data only.')
+
+    ## needs to be very rectangular - in levels, longitudes, latitudes, timestamps and variables
+    if isGrid:
+        if 'verticalRange' in options or 'presRange' in options:
+            ### level subset
+            levels = [p['levels'] for p in griddata]
+        else:
+            ### full level spectrum
+            levels = [m['levels'] for m in gridmeta]
+        levels = [j for i in levels for j in i] 
+        levels = sort_and_dedupe(levels)
+    elif isTS:
+        levels = [0] # assume this is just a surface grid
+        tslvls = [d.get('level', None) for d in griddata] # try and see if there are level annotations
+        tslvls = [x for x in tslvls if x is not None]
+        if len(tslvls) > 0:
+            levels = tslvls
+            levels.sort()
+
+    locations = [d['geolocation']['coordinates'] for d in griddata]
+    longitudes = list(set([x[0] for x in locations]))
+    longitudes.sort()
+    latitudes = list(set([x[1] for x in locations]))
+    latitudes.sort()
+    if isGrid:
+        timestamps = list(set([x['timestamp'] for x in griddata]))
+        timestamps.sort()
+    elif isTS:
+        if 'startDate' in options or 'endDate' in options:
+            ### time subset
+            timestamps = [p['timeseries'] for p in griddata]
+        else:
+            ### full time spectrum
+            timestamps = [m['timeseries'] for m in gridmeta]
+        timestamps = list({x for sub in timestamps for x in sub}) # no weird intervals like in levels
+        timestamps.sort()
+    timestamps = [parsetime(t) for t in timestamps]
+    variables = [p['data_info'][0] for p in griddata]
+    vars = list({x for sub in variables for x in sub})
+    vars.sort()
+
+    ## construct 4D data array
+    darray = {}
+    for v in vars:
+        darray[v] = (('timestamp', 'longitude', 'latitude', 'level'), numpy.full((len(timestamps), len(longitudes), len(latitudes), len(levels)), numpy.nan, dtype=float))
+    
+    for p in griddata:
+        m = metalookup[p['metadata'][0]]
+        lvls = []
+        if isGrid:
+            if 'levels' in p:
+                lvls = p['levels']
+            else:
+                lvls = m['levels']
+
+        times = []
+        if isTS:
+            if 'timeseries' in p:
+                times = p['timeseries']
+            else:
+                times = m['timeseries']
+        times = [parsetime(t) for t in times]
+        
+        lon_idx = longitudes.index(p['geolocation']['coordinates'][0])
+        lat_idx = latitudes.index(p['geolocation']['coordinates'][1])
+        if isGrid:
+            time_idx = timestamps.index(parsetime(p['timestamp']))
+    
+        for v in vars:
+            if v in p['data_info'][0]:
+                v_idx = p['data_info'][0].index(v)
+                for i,val in enumerate(p['data'][v_idx]):
+                    if isGrid:
+                        lvl_idx = levels.index(lvls[i])
+                    elif isTS:
+                        time_idx = timestamps.index(times[i])
+                        level = 0
+                        if 'level' in p:
+                            level = p['level']
+                        lvl_idx = levels.index(level)
+                    darray[v][1][time_idx][lon_idx][lat_idx][lvl_idx] = val
+                    
+    if isinstance(levels[0], list): # integral ranges have weird levels, label them with strings
+        levels = ['_'.join([str(i) for i in x]) for x in levels]
+    return xarray.Dataset(darray,coords = {'timestamp':timestamps, 'longitude':longitudes, 'latitude':latitudes, 'level':levels})
+
+def queryProfile(route, options={}, apikey='', apiroot='https://argovis-api.colorado.edu/', verbose=False):
+    # perform a search exactly as query(...) on a profile schema route,
+    # and munge the results into a list of Profile objects
+
+    ## fetch raw data from Argovis
+    data = query(route, options=options, apikey=apikey, apiroot=apiroot, verbose=verbose)
+    meta = query(route, options={**options, 'batchmeta':True}, apikey=apikey, apiroot=apiroot, verbose=verbose)
+    metalookup = {x['_id']: x for x in meta}
+
+    return [Profile(x, metalookup[x['metadata'][0]]) for x in data]
+
+def profile_is_empty(data, data_info):
+    # check if a profile is nothing but nan / none in every variable except pressure
+
+    for i in range(len(data)):
+        if data_info[0][i] != 'pressure' and any([v is not None and (type(v) not in [float, numpy.float64] or not math.isnan(v)) for v in data[i]]):
+            return False
+
+    return True
+
+def rg_levels():
+    # return the standard levels in dbar used in Roemmich-Gilson Argo climatology
+    return [2.5,10,20,30,40,50,60,70,80,90,100,110,120,130,140,150,160,170,182.5,200,220,240,260,280,300,320,340,360,380,400,420,440,462.5,500,550,600,650,700,750,800,850,900,950,1000,1050,1100,1150,1200,1250,1300,1350,1412.5,1500,1600,1700,1800,1900,1975]
+
+def build_dataset(interpolated_profiles, levels):
+    # munge into an xarray dataset dimensioned by a profile index and levels, in analogy to Argo GDAC files
+    # <interpolated_profiles> is a list of Argovis profile JSON or a list of Profile objects which must all have the same level spectrum
+    # <levels> is a list of floats labeling the levels.
+
+    # shred Profiles or json into the information we need
+    nprofs = range(len(interpolated_profiles))
+    darray = {}
+    ids = []
+    longitudes = []
+    latitudes = []
+    timestamps = []
+    if isinstance(interpolated_profiles[0], Profile):
+        ## Profile objects
+        variables = [p.variable_names() for p in interpolated_profiles]
+        vars = list({x for sub in variables for x in sub})
+        vars.sort()
+
+        ### empty block for variables
+        for v in vars:
+            if not v == 'pressure':
+                darray[v] = (('nprof', 'level'), numpy.full((len(nprofs), len(levels)), numpy.nan, dtype=float))
+
+        #### fill in variables
+        for i, p in enumerate(interpolated_profiles):
+            prof_idx = i
+            for v in vars:
+                if v in p.variable_names() and not v == 'pressure':
+                    var = p.getvar(v)
+                    if len(var) != len(levels):
+                        raise Exception('all variables in all profiles must be interpolated to a consistent set of levels, as described by the <levels> argument.')
+                    for j,val in enumerate(var):
+                        lvl_idx = j
+                        darray[v][1][prof_idx][lvl_idx] = val
+
+        #### form coordinates
+        ids = [p.id for p in interpolated_profiles]
+        longitudes = [p.longitude for p in interpolated_profiles]
+        latitudes = [p.latitude for p in interpolated_profiles]
+        timestamps = [p.timestamp for p in interpolated_profiles]
+        timestamps = [parsetime(t) for t in timestamps]
+    else:
+        ## JSON docs
+        variables = [p['data_info'][0] for p in interpolated_profiles]
+        vars = list({x for sub in variables for x in sub})
+        vars.sort()
+
+        ### empty block for variables
+        for v in vars:
+            if not v == 'pressure':
+                darray[v] = (('nprof', 'level'), numpy.full((len(nprofs), len(levels)), numpy.nan, dtype=float))
+
+        ### fill in variables
+        for i, p in enumerate(interpolated_profiles):
+            prof_idx = i
+            for v in vars:
+                if v in p['data_info'][0] and not v == 'pressure':
+                    v_idx = p['data_info'][0].index(v)
+                    if len(p['data'][v_idx]) != len(levels):
+                        raise Exception('all variables in all profiles must be interpolated to a consistent set of levels, as described by the <levels> argument.')
+                    for j,val in enumerate(p['data'][v_idx]):
+                        lvl_idx = j
+                        darray[v][1][prof_idx][lvl_idx] = val
+
+        ### form coordinates
+        ids = [p['_id'] for p in interpolated_profiles]
+        longitudes = [p['geolocation']['coordinates'][0] for p in interpolated_profiles]
+        latitudes = [p['geolocation']['coordinates'][1] for p in interpolated_profiles]
+        timestamps = [p['timestamp'] for p in interpolated_profiles]
+        timestamps = [parsetime(t) for t in timestamps]
+
+    coords = {
+        "id": ("nprof", ids),
+        "longitude": ("nprof", longitudes),
+        "latitude": ("nprof", latitudes),
+        "timestamp": ("nprof", timestamps),
+        "levels": ("level", levels),
+    }
+
+    attrs = {}
+    return xarray.Dataset(darray,coords,attrs)
+
+def setvar(profile, varname, values, data_info_meta=None):
+    # set a new variable on a JSON profile, in analogy to Profile.setvar
+    # data_info_meta should be a list specifying the metadata for this variable named in data_info[1]. 
+    if not 'data_info' in profile:
+        raise Exception('Profile must carry its data_info property, which it will if you included a "data" request in your query.')
+    if varname in profile['data_info'][0]:
+        raise Exception(f'Profile already has a variable {varname}.')
+
+    p = copy.deepcopy(profile)
+    p['data'].append(values)
+    p['data_info'][0].append(varname)
+    if data_info_meta is None:
+        data_info_meta = ['']*len(p['data_info'][1])
+    p['data_info'][2].append(data_info_meta)
+
+    return p
+
+def getvar(variable, data_doc, metadata_doc=None):
+    # given a raw data document which includes data_info, try and extract variable as a list.
+    # metadata_doc is required if data_doc doesn't have data_info
+
+    data_info = find_key('data_info', data_doc, metadata_doc)
+    try:
+        var_idx = data_info[0].index(variable)
+    except:
+        print(variable, ' not found in this data document; available variables are ', data_info[0])
+        return None
+    
+    return data_doc['data'][var_idx]
+
+@dataclass
+class Profile:
+    rawdata: dict[str, Any] = field(default_factory=dict)
+    rawmeta: dict[str, Any] = field(default_factory=dict)
+    vars: dict[str, numpy.ndarray] = field(default_factory=dict, repr=False)
+
+    def __init__(self, data, meta=None):
+        self._rawdata = copy.deepcopy(data)
+        self._rawmeta = copy.deepcopy(meta)
+        
+        data_info = [[],[],[]]
+        if 'data_info' in data:
+            data_info = data['data_info']
+        elif 'data_info' in meta:
+            data_info = meta['data_info']
+
+        self.vars = {}
+        for i, name in enumerate(data_info[0]):
+            arr = numpy.ma.masked_invalid(numpy.array(data['data'][i], dtype=float))
+            self.vars[name] = arr
+        del self._rawdata['data']
+
+        # dict for arbitrary annotations
+        self.attrs = {}
+
+    # ---- pretend like you're a dictionary for p['arbitrary_key'] ----
+    def __getitem__(self, key):
+        return self.attrs[key]
+
+    def __setitem__(self, key, value):
+        self.attrs[key] = value
+
+    def get(self, key, default=None):
+        return self.attrs.get(key, default)
+        
+    # ---- metadata sugar ----
+    @property
+    def id(self):
+        return self.rawdata['_id']
+
+    @property
+    def timestamp(self):
+        return parser.parse(self.rawdata['timestamp'], ignoretz=True)
+
+    @property
+    def longitude(self):
+        return float(self.rawdata['geolocation']['coordinates'][0])
+
+    @property
+    def latitude(self):
+        return float(self.rawdata['geolocation']['coordinates'][1])
+
+    @property
+    def rawdata(self):
+        return self._rawdata
+
+    @property
+    def rawmeta(self):
+        return self._rawmeta
+    
+    # ---- variable helpers ----
+    def variable_names(self):
+        return tuple(self.vars.keys())
+
+    def hasvar(self, name):
+        return name in self.vars
+
+    def getvar(self, name, preserve_mask=False):
+        if preserve_mask:
+            return self.vars.get(name)
+        else:
+            return self.vars.get(name).filled(numpy.nan) if name in self.vars else None
+
+    def setvar(self, name, values, mask=None):
+        arr = numpy.ma.masked_array(values, mask=mask, dtype=float) 
+        if arr.ndim != 1:
+            raise ValueError(f"Variable {name!r} must be 1D, got shape {arr.shape}")
+        self.vars[name] = arr
+
+    def delvar(self, name):
+        del self.vars[name]
