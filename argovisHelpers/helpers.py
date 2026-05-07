@@ -251,10 +251,10 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
             options[option] = str(options[option])
 
     try:
-        version = version("argovisHelpers")
+        vsn = version("argovisHelpers")
     except DistributionNotFound:
-        version = '-1'
-    dl = requests.get(apiroot.rstrip('/') + '/' + route.lstrip('/'), params = options, headers={'x-argokey': apikey, 'x-avh-telemetry': version})
+        vsn = '-1'
+    dl = requests.get(apiroot.rstrip('/') + '/' + route.lstrip('/'), params = options, headers={'x-argokey': apikey, 'x-avh-telemetry': vsn})
     statuscode = dl.status_code
     if verbose:
         print(urllib.parse.unquote(dl.url))
