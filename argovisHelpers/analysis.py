@@ -40,6 +40,7 @@ def MLD_estimate(pressure, var, threshold_delta, reference_pressure=10):
         for r in roots:
             if r > reference_pressure:
                 return r, flag
+        return None, 512 # roots exist but none of them physical
     else:
         return None, 512
 
