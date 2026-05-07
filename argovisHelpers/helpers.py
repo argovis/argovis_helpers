@@ -2,7 +2,7 @@ from __future__ import annotations
 import requests, datetime, copy, time, re, area, math, urllib, json, xarray, numpy, scipy.interpolate, gsw
 from shapely.geometry import shape, box, Polygon
 from shapely.ops import orient
-from importlib.metadata import version
+from importlib.metadata import version, PackageNotFoundError
 from dataclasses import dataclass, field
 from typing import Any
 from dateutil import parser
@@ -250,7 +250,10 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
         if option in options:
             options[option] = str(options[option])
 
-    vsn = version("argovisHelpers")
+    try:
+        vsn = version("argovisHelpers")
+    except PackageNotFoundError:
+        vsn = -1
     dl = requests.get(apiroot.rstrip('/') + '/' + route.lstrip('/'), params = options, headers={'x-argokey': apikey, 'x-avh-telemetry': vsn})
     statuscode = dl.status_code
     if verbose:
