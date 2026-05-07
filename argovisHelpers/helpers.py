@@ -520,6 +520,10 @@ def rg_levels():
     # return the standard levels in dbar used in Roemmich-Gilson Argo climatology
     return [2.5,10,20,30,40,50,60,70,80,90,100,110,120,130,140,150,160,170,182.5,200,220,240,260,280,300,320,340,360,380,400,420,440,462.5,500,550,600,650,700,750,800,850,900,950,1000,1050,1100,1150,1200,1250,1300,1350,1412.5,1500,1600,1700,1800,1900,1975]
 
+def glodap_levels():
+    # return the standard levels in dbar used in GLODAPv2 climatology
+    return [0, 10, 20, 30, 50, 75, 100, 125, 150, 200, 250, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500, 1750, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500]
+
 def build_dataset(interpolated_profiles, levels):
     # munge into an xarray dataset dimensioned by a profile index and levels, in analogy to Argo GDAC files
     # <interpolated_profiles> is a list of Argovis profile JSON or a list of Profile objects which must all have the same level spectrum
