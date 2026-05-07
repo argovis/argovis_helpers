@@ -2,8 +2,7 @@ from __future__ import annotations
 import requests, datetime, copy, time, re, area, math, urllib, json, xarray, numpy, scipy.interpolate, gsw
 from shapely.geometry import shape, box, Polygon
 from shapely.ops import orient
-import pkg_resources
-from pkg_resources import DistributionNotFound
+from importlib.metadata import version, PackageNotFoundError
 from dataclasses import dataclass, field
 from typing import Any
 from dateutil import parser
@@ -252,10 +251,10 @@ def argofetch(route, options={}, apikey='', apiroot='https://argovis-api.colorad
             options[option] = str(options[option])
 
     try:
-        version = pkg_resources.get_distribution('argovisHelpers').version
-    except DistributionNotFound:
-        version = '-1'
-    dl = requests.get(apiroot.rstrip('/') + '/' + route.lstrip('/'), params = options, headers={'x-argokey': apikey, 'x-avh-telemetry': version})
+        vsn = version("argovisHelpers")
+    except PackageNotFoundError:
+        vsn = '-1'
+    dl = requests.get(apiroot.rstrip('/') + '/' + route.lstrip('/'), params = options, headers={'x-argokey': apikey, 'x-avh-telemetry': vsn})
     statuscode = dl.status_code
     if verbose:
         print(urllib.parse.unquote(dl.url))
