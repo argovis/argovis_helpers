@@ -89,7 +89,7 @@ def slice_timesteps(options, r):
     else:
         end = get_timebound(r, 'endDate')
         
-    delta = datetime.datetime.timedelta(days=timestep)
+    delta = datetime.timedelta(days=timestep)
     times = [start]
     while times[-1] + delta < end:
         times.append(times[-1]+delta)
