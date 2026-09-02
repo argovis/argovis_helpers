@@ -1,3 +1,5 @@
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22259503.svg)](https://doi.org/10.5281/zenodo.22259503)
+
 ## Build and release
 
  - Review metadata in `pyproject.toml`; while determining if code is release worthy, append an rc tag to the semantic version, like `major.minor.patch.rcxx`
