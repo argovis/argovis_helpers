@@ -1,6 +1,6 @@
 from argovisHelpers import helpers
 from argovisHelpers import analysis
-import datetime, pytest, numpy, scipy, xarray, gsw
+import datetime, pytest, numpy, scipy, xarray, gsw, warnings
 
 @pytest.fixture
 def apiroot():
@@ -448,3 +448,344 @@ def test_regional_mean_multiple_variables():
 
     assert numpy.isclose(out["temp"].item(), expected_temp)
     assert numpy.isclose(out["salt"].item(), expected_salt)
+
+# ---------------------------------------------------------------------------
+# analysis.bin_profiles
+# ---------------------------------------------------------------------------
+
+def _make_profile(pid, lon, lat, values, varname='temperature', nlevels=None):
+    '''
+    Build a minimal helpers.Profile at (lon, lat) carrying <values> under <varname>.
+    <values> may be None to produce a profile that lacks <varname> entirely
+    (it will carry only 'pressure'), in which case <nlevels> sets the pressure length.
+    '''
+    if values is None:
+        n = nlevels
+        data = [list(range(n))]
+        names = ['pressure']
+    else:
+        n = len(values)
+        data = [list(values), list(range(n))]
+        names = [varname, 'pressure']
+    doc = {
+        '_id': pid,
+        'geolocation': {'type': 'Point', 'coordinates': [lon, lat]},
+        'data': data,
+        'data_info': [names, [], []],
+    }
+    return helpers.Profile(doc, meta={})
+
+
+def test_bin_profiles_nonsquare_tiling():
+    # 2 lat bins of 10 degrees by 2 lon bins of 15 degrees, tiling (0,20) x (100,130)
+    levels = [0, 10, 20]
+    profiles = [
+        _make_profile('sw', 102, 2, [1, 2, 3]),        # lat bin 0, lon bin 0
+        _make_profile('ne_a', 125, 15, [10, 20, 30]),  # lat bin 1, lon bin 1
+        _make_profile('ne_b', 128, 19, [20, 40, 60]),  # lat bin 1, lon bin 1
+        _make_profile('nw', 110, 12, [5, 5, 5]),       # lat bin 1, lon bin 0
+        # lat bin 0, lon bin 1 is deliberately left empty
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=10, lon_bin=15, lat_range=(0, 20), lon_range=(100, 130))
+
+    assert isinstance(ds, xarray.Dataset), 'should return an xarray Dataset'
+    assert ds['temperature'].dims == ('latitude', 'longitude', 'level'), 'variable dims should be (latitude, longitude, level)'
+    assert ds['n_profiles'].dims == ('latitude', 'longitude'), 'n_profiles dims should be (latitude, longitude)'
+    assert ds['temperature'].shape == (2, 2, 3), 'non-square bins should give a 2x2 grid over 3 levels'
+    assert numpy.allclose(ds['latitude'].data, [5, 15]), 'latitude bin centers'
+    assert numpy.allclose(ds['longitude'].data, [107.5, 122.5]), 'longitude bin centers'
+    assert numpy.allclose(ds['level'].data, levels), 'levels should pass through as a coordinate'
+
+    assert numpy.allclose(ds['temperature'].sel(latitude=5, longitude=107.5).data, [1, 2, 3]), 'single-profile cell should equal that profile'
+    assert numpy.allclose(ds['temperature'].sel(latitude=15, longitude=122.5).data, [15, 30, 45]), 'two-profile cell should be the levelwise mean'
+    assert numpy.allclose(ds['temperature'].sel(latitude=15, longitude=107.5).data, [5, 5, 5]), 'single-profile cell should equal that profile'
+    assert numpy.all(numpy.isnan(ds['temperature'].sel(latitude=5, longitude=122.5).data)), 'empty cell should be NaN at every level'
+
+    assert numpy.array_equal(ds['n_profiles'].data, [[1, 0], [1, 2]]), 'profile counts per cell'
+    assert ds['n_profiles'].data.sum() == len(profiles), 'with non-overlapping bins every in-range profile is counted exactly once'
+
+
+def test_bin_profiles_section():
+    # docstring example: one 10-degree latitude bin spanning (-5, 5) gives an equatorial longitude-depth section
+    levels = [0, 100]
+    profiles = [
+        _make_profile('a', 0.5, -4.9, [1, 1]),
+        _make_profile('b', 0.7, 4.9, [3, 3]),
+        _make_profile('c', 1.5, 0.0, [7, 7]),
+        _make_profile('d', 2.5, 6.0, [100, 100]),   # north of the section, ignored
+        _make_profile('e', 2.5, -5.5, [100, 100]),  # south of the section, ignored
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=10, lon_bin=1, lat_range=(-5, 5), lon_range=(0, 3))
+
+    assert ds.sizes['latitude'] == 1, 'a section has exactly one latitude bin'
+    assert numpy.isclose(ds['latitude'].item(), 0), 'section latitude center'
+    assert numpy.allclose(ds['longitude'].data, [0.5, 1.5, 2.5]), 'three 1-degree longitude bins'
+    assert numpy.array_equal(ds['n_profiles'].data, [[2, 1, 0]]), 'out-of-range latitudes should be excluded'
+    assert numpy.allclose(ds['temperature'].isel(latitude=0, longitude=0).data, [2, 2]), 'mean across the section bin'
+    assert numpy.allclose(ds['temperature'].isel(latitude=0, longitude=1).data, [7, 7])
+    assert numpy.all(numpy.isnan(ds['temperature'].isel(latitude=0, longitude=2).data))
+
+    # docstring example verbatim: lon_range=None with lon_bin=1 gives 360 longitude bins
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=10, lon_bin=1, lat_range=(-5, 5), lon_range=None)
+    assert ds['temperature'].shape == (1, 360, 2), 'section over the full globe'
+    assert numpy.allclose(ds['longitude'].data, numpy.arange(0.5, 360, 1)), 'global 1-degree longitude centers'
+
+    # a meridional section works the same way with the roles reversed
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=5, lon_bin=3, lat_range=(-10, 10), lon_range=(0, 3))
+    assert ds['temperature'].shape == (4, 1, 2), 'meridional section: 4 lat bins, 1 lon bin'
+    assert numpy.isclose(ds['longitude'].item(), 1.5)
+    assert numpy.array_equal(ds['n_profiles'].data[:, 0], [1, 1, 2, 1]), 'profiles at -5.5 / -4.9 / 0.0,4.9 / 6.0'
+
+
+def test_bin_profiles_overlapping():
+    # docstring example: lon_bin=0.5, lon_step=0.25 gives 0.5-degree bins every 0.25 degrees
+    levels = [0]
+    profiles = [
+        _make_profile('a', 0.4, 0.5, [1]),   # in [0,0.5) and [0.25,0.75), not [0.5,1)
+        _make_profile('b', 0.9, 0.5, [3]),   # only in [0.5,1)
+        _make_profile('c', 0.1, 0.5, [5]),   # only in [0,0.5)
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=0.5, lon_step=0.25, lat_range=(0, 1), lon_range=(0, 1))
+
+    assert numpy.allclose(ds['longitude'].data, [0.25, 0.5, 0.75]), 'overlapping bins: centers every lon_step'
+    assert numpy.array_equal(ds['n_profiles'].data, [[2, 1, 1]]), 'a profile in the overlap region is counted in both bins'
+    assert ds['n_profiles'].data.sum() > len(profiles), 'overlapping bins count some profiles more than once'
+    assert numpy.allclose(ds['temperature'].data[0, :, 0], [3, 1, 3]), 'means per overlapping bin'
+    assert ds.attrs['lon_step'] == 0.25 and ds.attrs['lon_bin'] == 0.5, 'bin and step recorded in attrs'
+    assert ds.attrs['lat_step'] == 1, 'unspecified step defaults to bin width'
+
+    # overlap in latitude as well
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=1, lat_step=0.5, lon_bin=1, lat_range=(0, 2), lon_range=(0, 1))
+    assert numpy.allclose(ds['latitude'].data, [0.5, 1.0, 1.5]), 'overlapping latitude bins'
+    assert numpy.array_equal(ds['n_profiles'].data[:, 0], [3, 3, 0]), 'lat 0.5 is in [0,1) and [0.5,1.5) but not [1,2]'
+
+    # step equal to bin is just the default tiling
+    ds_default = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=0.5, lat_range=(0, 1), lon_range=(0, 1))
+    ds_explicit = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=0.5, lon_step=0.5, lat_range=(0, 1), lon_range=(0, 1))
+    assert ds_default.identical(ds_explicit), 'lon_step=lon_bin should match the default'
+
+
+def test_bin_profiles_default_domain():
+    # lat_range / lon_range None -> -90..90 and 0..360
+    levels = [0]
+    profiles = [
+        _make_profile('neg_lon', -90, 45, [1]),  # -90 -> 270
+        _make_profile('pos_lon', 90, -45, [2]),
+        _make_profile('north_pole', 10, 90, [3]),   # exactly +90 must not be lost
+        _make_profile('south_pole', 10, -90, [4]),  # exactly -90 is the first bin's low edge
+        _make_profile('lon360', 360, 10, [5]),      # 360 is represented as 0
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=90, lon_bin=180)
+
+    assert numpy.allclose(ds['latitude'].data, [-45, 45]), 'default latitude domain is -90..90'
+    assert numpy.allclose(ds['longitude'].data, [90, 270]), 'default longitude domain is 0..360'
+    assert ds.attrs['lat_range'] == (-90, 90) and ds.attrs['lon_range'] == (0, 360), 'resolved ranges recorded in attrs'
+    assert ds['n_profiles'].data.sum() == len(profiles), 'every profile on the globe lands in some cell'
+    assert ds['n_profiles'].sel(latitude=45, longitude=270).item() == 1, 'negative longitude wrapped to 0..360'
+    assert ds['n_profiles'].sel(latitude=45, longitude=90).item() == 2, 'north pole profile and lon=360 profile'
+    assert numpy.isclose(ds['temperature'].sel(latitude=45, longitude=90).item(), 4), 'mean of lat=90 (3) and lon=360 (5) profiles'
+    assert ds['n_profiles'].sel(latitude=-45, longitude=90).item() == 2, 'south pole profile and lat=-45 profile'
+
+    # explicit full-globe ranges are accepted in either convention
+    ds_0360 = analysis.bin_profiles(profiles, levels, lat_bin=90, lon_bin=180, lon_range=(0, 360))
+    assert ds_0360.identical(ds), 'lon_range=(0,360) is the same as the default'
+    ds_pm180 = analysis.bin_profiles(profiles, levels, lat_bin=90, lon_bin=180, lon_range=(-180, 180))
+    assert ds_pm180['n_profiles'].data.sum() == len(profiles), '(-180,180) covers the globe'
+    assert set(numpy.round(ds_pm180['longitude'].data, 6)) == {90.0, 270.0}, '(-180,180) centers presented in 0..360'
+    assert ds_pm180['n_profiles'].sel(longitude=270).sum().item() == 1 and ds_pm180['n_profiles'].sel(longitude=90).sum().item() == 4
+
+    # the whole globe can be a single bin
+    ds_one = analysis.bin_profiles(profiles, levels, lat_bin=180, lon_bin=360)
+    assert ds_one['temperature'].shape == (1, 1, 1)
+    assert ds_one['n_profiles'].item() == len(profiles)
+    assert numpy.isclose(ds_one['temperature'].item(), 3), 'global mean of 1..5'
+
+
+def test_bin_profiles_dateline():
+    # docstring: lon_range=(350, 20) is allowed; internally 350..380
+    levels = [0]
+    profiles = [
+        _make_profile('a', 355, 0, [1]),
+        _make_profile('b', -5, 0, [3]),     # also 355
+        _make_profile('c', 5, 0, [5]),      # 365 unwrapped
+        _make_profile('d', 15, 0, [7]),     # 375 unwrapped
+        _make_profile('e', 25, 0, [100]),   # outside
+        _make_profile('f', 349.9, 0, [100]),# outside
+        _make_profile('g', 350, 0, [9]),    # exactly on the low edge, included
+        _make_profile('h', 20, 0, [100]),   # exactly on the high edge, excluded (half-open)
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=2, lon_bin=10, lat_range=(-1, 1), lon_range=(350, 20))
+
+    assert numpy.allclose(ds['longitude'].data, [355, 5, 15]), 'centers presented in 0..360 even across the seam'
+    assert ds.attrs['lon_range'] == (350, 380), 'attrs record the unwrapped internal range'
+    assert numpy.array_equal(ds['n_profiles'].data, [[3, 1, 1]]), 'a, b, g in the first bin; c; d'
+    assert numpy.allclose(ds['temperature'].data[0, :, 0], [13 / 3, 5, 7])
+
+    # the same region expressed with a negative start
+    ds2 = analysis.bin_profiles(profiles, levels, lat_bin=2, lon_bin=10, lat_range=(-1, 1), lon_range=(-10, 20))
+    assert ds2.identical(ds), '(-10, 20) is the same region as (350, 20)'
+
+    # overlapping bins across the dateline
+    ds3 = analysis.bin_profiles(profiles, levels, lat_bin=2, lon_bin=10, lon_step=5, lat_range=(-1, 1), lon_range=(350, 20))
+    assert numpy.allclose(ds3['longitude'].data, [355, 0, 5, 10, 15])
+    # unwrapped bins: [350,360) a,b,g; [355,365) a,b; [360,370) c; [365,375) c; [370,380) d
+    assert numpy.array_equal(ds3['n_profiles'].data, [[3, 2, 1, 1, 1]]), 'overlapping bins straddling the seam'
+
+
+def test_bin_profiles_edges_half_open():
+    # bins are [low, high) except the final latitude bin, which also includes its upper edge
+    levels = [0]
+    profiles = [
+        _make_profile('lat_edge', 0.5, 10, [1]),   # interior lat edge -> upper bin
+        _make_profile('lon_edge', 10, 0.5, [1]),   # interior lon edge -> upper bin
+        _make_profile('lat_max', 0.5, 20, [1]),    # top of range -> included in last lat bin
+        _make_profile('lon_max', 20, 0.5, [1]),    # end of lon range -> excluded
+        _make_profile('origin', 0, 0, [1]),        # low corner -> included
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=10, lon_bin=10, lat_range=(0, 20), lon_range=(0, 20))
+
+    assert ds['n_profiles'].sel(latitude=5, longitude=5).item() == 1, 'origin'
+    assert ds['n_profiles'].sel(latitude=15, longitude=5).item() == 2, 'lat_edge and lat_max'
+    assert ds['n_profiles'].sel(latitude=5, longitude=15).item() == 1, 'lon_edge'
+    assert ds['n_profiles'].sel(latitude=15, longitude=15).item() == 0
+    assert ds['n_profiles'].data.sum() == 4, 'lon_max is excluded because longitude stays half-open'
+
+    # lat_max is only kept because it is the last bin: with a taller range it moves up a bin
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=10, lon_bin=10, lat_range=(0, 30), lon_range=(0, 20))
+    assert ds['n_profiles'].sel(latitude=25, longitude=5).item() == 1, 'lat=20 is now an interior edge -> upper bin'
+    assert ds['n_profiles'].sel(latitude=15, longitude=5).item() == 1
+
+
+def test_bin_profiles_missing_data():
+    levels = [0, 10, 20]
+    profiles = [
+        _make_profile('good', 5, 5, [1, 2, 3]),
+        _make_profile('partial', 5, 5, [3, numpy.nan, numpy.nan]),
+        _make_profile('all_nan', 5, 5, [numpy.nan, numpy.nan, numpy.nan]),
+        _make_profile('novar', 5, 5, None, nlevels=3),  # lacks 'temperature' entirely
+        _make_profile('deep_nan_only', 15, 5, [numpy.nan, numpy.nan, 8]),
+    ]
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', RuntimeWarning)
+        ds = analysis.bin_profiles(profiles, levels, lat_bin=10, lon_bin=10, lat_range=(0, 10), lon_range=(0, 20))
+
+    assert ds['n_profiles'].sel(longitude=5).item() == 2, 'all-NaN and missing-variable profiles are not counted'
+    assert numpy.allclose(ds['temperature'].sel(longitude=5).data, [2, 2, 3]), 'nanmean per level ignores the partial NaNs'
+    assert ds['n_profiles'].sel(longitude=15).item() == 1
+    assert numpy.allclose(ds['temperature'].sel(longitude=15).data, [numpy.nan, numpy.nan, 8], equal_nan=True), 'levels NaN for every profile in a populated cell stay NaN, without warning'
+
+    # a cell that only receives unusable profiles is empty
+    ds = analysis.bin_profiles(profiles[2:4], levels, lat_bin=10, lon_bin=10, lat_range=(0, 10), lon_range=(0, 10))
+    assert ds['n_profiles'].item() == 0
+    assert numpy.all(numpy.isnan(ds['temperature'].data))
+
+    # no profiles at all
+    ds = analysis.bin_profiles([], levels, lat_bin=10, lon_bin=10, lat_range=(0, 20), lon_range=(0, 20))
+    assert ds['temperature'].shape == (2, 2, 3)
+    assert numpy.all(numpy.isnan(ds['temperature'].data)) and numpy.all(ds['n_profiles'].data == 0)
+
+    # wrong number of levels is an error naming the profile
+    bad = [_make_profile('short', 5, 5, [1, 2])]
+    with pytest.raises(ValueError, match='short'):
+        analysis.bin_profiles(bad, levels, lat_bin=10, lon_bin=10, lat_range=(0, 10), lon_range=(0, 10))
+
+
+def test_bin_profiles_varname():
+    levels = [0, 1]
+    profiles = [
+        _make_profile('s1', 5, 5, [34, 35], varname='salinity'),
+        _make_profile('s2', 5, 5, [36, 37], varname='salinity'),
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=10, lon_bin=10, lat_range=(0, 10), lon_range=(0, 10), varname='salinity')
+    assert 'salinity' in ds and 'temperature' not in ds, 'output variable is named after varname'
+    assert numpy.allclose(ds['salinity'].data[0, 0], [35, 36])
+    assert ds['n_profiles'].item() == 2
+
+    # asking for a variable none of the profiles carry yields an empty grid, not an error
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=10, lon_bin=10, lat_range=(0, 10), lon_range=(0, 10), varname='temperature')
+    assert ds['n_profiles'].item() == 0 and numpy.all(numpy.isnan(ds['temperature'].data))
+
+
+def test_bin_profiles_fit_and_float():
+    # bins must fit the range exactly; fitting is judged with a tolerance so 0.1-degree bins work
+    levels = [0]
+    ds = analysis.bin_profiles([], levels, lat_bin=0.1, lon_bin=0.1, lat_range=(0, 1), lon_range=(0, 1))
+    assert ds['temperature'].shape == (10, 10, 1), 'ten 0.1-degree bins across a 1-degree range'
+    assert numpy.allclose(ds['latitude'].data, numpy.arange(0.05, 1, 0.1))
+
+    ds = analysis.bin_profiles([], levels, lat_bin=1, lon_bin=1)
+    assert ds['temperature'].shape == (180, 360, 1), 'global 1-degree grid'
+
+    # not an integer number of bins
+    with pytest.raises(ValueError, match='do not fit'):
+        analysis.bin_profiles([], levels, lat_bin=7, lon_bin=10, lat_range=(0, 20), lon_range=(0, 20))
+    with pytest.raises(ValueError, match='do not fit'):
+        analysis.bin_profiles([], levels, lat_bin=10, lon_bin=7, lat_range=(0, 20), lon_range=(0, 20))
+    # overlapping bins whose step doesn't land the last bin on the range maximum
+    with pytest.raises(ValueError, match='do not fit'):
+        analysis.bin_profiles([], levels, lat_bin=1, lon_bin=0.5, lon_step=0.3, lat_range=(0, 1), lon_range=(0, 1))
+    # bin wider than the range
+    with pytest.raises(ValueError, match='wider than'):
+        analysis.bin_profiles([], levels, lat_bin=30, lon_bin=10, lat_range=(0, 20), lon_range=(0, 20))
+    with pytest.raises(ValueError, match='wider than'):
+        analysis.bin_profiles([], levels, lat_bin=10, lon_bin=30, lat_range=(0, 20), lon_range=(0, 20))
+
+    # the output coordinates always have the first low edge on the range min and last high edge on the range max
+    ds = analysis.bin_profiles([], levels, lat_bin=3, lat_step=1, lon_bin=4, lon_step=2, lat_range=(-6, 6), lon_range=(100, 120))
+    assert numpy.isclose(ds['latitude'].data[0] - 1.5, -6) and numpy.isclose(ds['latitude'].data[-1] + 1.5, 6)
+    assert numpy.isclose(ds['longitude'].data[0] - 2, 100) and numpy.isclose(ds['longitude'].data[-1] + 2, 120)
+    assert numpy.allclose(numpy.diff(ds['latitude'].data), 1) and numpy.allclose(numpy.diff(ds['longitude'].data), 2), 'centers spaced by step'
+
+
+def test_bin_profiles_validation():
+    levels = [0]
+    ok = dict(lat_bin=10, lon_bin=10, lat_range=(0, 20), lon_range=(0, 20))
+
+    def call(**overrides):
+        return analysis.bin_profiles([], levels, **{**ok, **overrides})
+
+    # bin widths
+    with pytest.raises(ValueError, match='lat_bin must be positive'):
+        call(lat_bin=0)
+    with pytest.raises(ValueError, match='lon_bin must be positive'):
+        call(lon_bin=-1)
+    with pytest.raises(ValueError, match='lat_bin cannot exceed 180'):
+        call(lat_bin=181)
+    with pytest.raises(ValueError, match='lon_bin cannot exceed 360'):
+        call(lon_bin=361)
+
+    # steps
+    with pytest.raises(ValueError, match='lat_step must be positive'):
+        call(lat_step=0)
+    with pytest.raises(ValueError, match='lon_step must be positive'):
+        call(lon_step=-0.5)
+    with pytest.raises(ValueError, match='lat_step cannot exceed lat_bin'):
+        call(lat_step=11)
+    with pytest.raises(ValueError, match='lon_step cannot exceed lon_bin'):
+        call(lon_step=11)
+
+    # latitude range
+    with pytest.raises(ValueError, match='lat_range must be'):
+        call(lat_range=(0, 10, 20))
+    with pytest.raises(ValueError, match='-90 <= min < max <= 90'):
+        call(lat_range=(20, 0))
+    with pytest.raises(ValueError, match='-90 <= min < max <= 90'):
+        call(lat_range=(10, 10))
+    with pytest.raises(ValueError, match='-90 <= min < max <= 90'):
+        call(lat_range=(-100, 0), lat_bin=100)
+    with pytest.raises(ValueError, match='-90 <= min < max <= 90'):
+        call(lat_range=(0, 91), lat_bin=91)
+
+    # longitude range
+    with pytest.raises(ValueError, match='lon_range must be'):
+        call(lon_range=(0,))
+    with pytest.raises(ValueError, match='zero width'):
+        call(lon_range=(10, 10))
+    with pytest.raises(ValueError, match='more than 360'):
+        call(lon_range=(0, 400), lon_bin=10)
+    with pytest.raises(ValueError, match='more than 360'):
+        call(lon_range=(400, 0), lon_bin=10)
+    # a reversed partial range isn't an error: it's the complementary dateline-crossing range
+    ds = call(lon_range=(20, 0), lon_bin=10)
+    assert ds.sizes['longitude'] == 34, '(20, 0) spans 340 degrees the long way round'
+    assert numpy.isclose(ds['longitude'].data[0], 25) and numpy.isclose(ds['longitude'].data[-1], 355)
