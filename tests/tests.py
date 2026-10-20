@@ -1,6 +1,6 @@
 from argovisHelpers import helpers
 from argovisHelpers import analysis
-import datetime, pytest, numpy, scipy, xarray, gsw, warnings
+import datetime, pytest, numpy, scipy, xarray, gsw, warnings, pandas
 
 @pytest.fixture
 def apiroot():
@@ -789,3 +789,279 @@ def test_bin_profiles_validation():
     ds = call(lon_range=(20, 0), lon_bin=10)
     assert ds.sizes['longitude'] == 34, '(20, 0) spans 340 degrees the long way round'
     assert numpy.isclose(ds['longitude'].data[0], 25) and numpy.isclose(ds['longitude'].data[-1], 355)
+
+# ---------------------------------------------------------------------------
+# analysis.remove_seasonal_and_trend
+# ---------------------------------------------------------------------------
+
+def _monthly_times(start='2000-01-01', n=120):
+    return pandas.date_range(start, periods=n, freq='MS')
+
+
+def _years(times):
+    # elapsed time in 365.25-day years from the first sample; the helper's harmonics use the same year length
+    return numpy.asarray((times - times[0]) / pandas.Timedelta(days=365.25), dtype=float)
+
+
+def _harmonics(t, amps=((2.0, 1.0), (0.5, -0.25))):
+    # amps[k-1] = (cos amplitude, sin amplitude) of harmonic k
+    out = numpy.zeros_like(t)
+    for k, (a, b) in enumerate(amps, start=1):
+        out += a * numpy.cos(2 * numpy.pi * k * t) + b * numpy.sin(2 * numpy.pi * k * t)
+    return out
+
+
+def _series(values, times, name='x'):
+    return xarray.DataArray(values, dims=['timestamp'], coords={'timestamp': times}, name=name)
+
+
+def test_rsat_climatology_matches_monthly_means():
+    rng = numpy.random.default_rng(0)
+    times = _monthly_times(n=120)
+    da = _series(rng.normal(size=120), times)
+
+    anom = analysis.remove_seasonal_and_trend(da, seasonal='climatology', trend=None)
+    expected = da.groupby('timestamp.month') - da.groupby('timestamp.month').mean()
+    assert numpy.allclose(anom.data, expected.data), 'climatology with no trend is exactly removal of the monthly means'
+    assert anom.dims == da.dims and anom['timestamp'].equals(da['timestamp']), 'output keeps the input dims and coordinate'
+
+    comps = analysis.remove_seasonal_and_trend(da, seasonal='climatology', trend=None, return_components=True)
+    assert isinstance(comps, xarray.Dataset) and set(comps.data_vars) == {'anomaly', 'climatology', 'trend'}
+    monthly = da.groupby('timestamp.month').mean()
+    assert numpy.allclose(comps['climatology'].data, monthly.sel(month=times.month).data), 'climatology component is the monthly mean at each time'
+    assert numpy.allclose(comps['trend'].data, 0), 'no trend requested -> trend component is identically zero'
+    assert numpy.allclose(comps['anomaly'].data, anom.data), 'anomaly component matches the plain return'
+
+
+def test_rsat_mean_only():
+    rng = numpy.random.default_rng(1)
+    times = _monthly_times(n=60)
+    da = _series(rng.normal(size=60) + 7, times)
+
+    comps = analysis.remove_seasonal_and_trend(da, seasonal=None, trend=None, return_components=True)
+    assert numpy.allclose(comps['climatology'].data, da.mean().item()), 'seasonal=None removes only the time mean'
+    assert numpy.allclose(comps['anomaly'].data, da.data - da.mean().item())
+    assert numpy.allclose(comps['trend'].data, 0)
+
+
+def test_rsat_harmonic_recovery():
+    times = _monthly_times(n=120)
+    t = _years(times)
+    da = _series(10 + _harmonics(t), times)
+
+    anom = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=2, trend=None)
+    assert numpy.allclose(anom.data, 0, atol=1e-8), 'annual + semiannual harmonics are recovered exactly'
+
+    # one harmonic only leaves the semiannual signal behind
+    anom1 = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=1, trend=None)
+    # (uneven month lengths make the two harmonics very slightly non-orthogonal on a monthly grid, hence the tolerance)
+    assert numpy.allclose(anom1.data, _harmonics(t, amps=((0, 0), (0.5, -0.25))), atol=0.01), 'the unmodelled semiannual harmonic is what remains'
+
+    # extra harmonics are harmless on a signal that doesn't contain them
+    anom3 = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=3, trend=None)
+    assert numpy.allclose(anom3.data, 0, atol=1e-8)
+
+    # the harmonic fit doesn't need regular sampling
+    rng = numpy.random.default_rng(2)
+    irregular = pandas.DatetimeIndex(sorted(pandas.Timestamp('2000-01-01') + pandas.to_timedelta(rng.integers(0, 365 * 8, size=150), unit='D')))
+    ti = _years(irregular)
+    da_irr = _series(3 + _harmonics(ti), irregular)
+    anom_irr = analysis.remove_seasonal_and_trend(da_irr, seasonal='harmonic', n_harmonics=2, trend=None)
+    assert numpy.allclose(anom_irr.data, 0, atol=1e-8), 'harmonics fit irregularly sampled records'
+
+
+def test_rsat_linear_trend_joint_fit():
+    # 30 months, Jan..Jun: a record that doesn't cover whole years, where fitting the
+    # climatology first and then the trend would bias both. The joint fit is exact.
+    times = _monthly_times(n=30)
+    t = _years(times)
+    monthly_cycle = numpy.array([3, 2, 1, 0, -1, -2, -3, -2, -1, 0, 1, 2], dtype=float)[times.month - 1]
+    da = _series(5 + 0.3 * t + monthly_cycle, times)
+
+    comps = analysis.remove_seasonal_and_trend(da, seasonal='climatology', trend='linear', return_components=True)
+    assert numpy.allclose(comps['anomaly'].data, 0, atol=1e-8), 'climatology + linear trend recovered jointly'
+    trend = comps['trend'].data
+    assert numpy.allclose(numpy.diff(trend) / numpy.diff(t), 0.3), 'trend component has the right slope in units per year'
+    # the trend is anchored at zero at the midpoint of the fit period, so the climatology carries the level there
+    t_mid = (times.min() + (times.max() - times.min()) / 2)
+    i_before, i_after = numpy.searchsorted(times, t_mid) - 1, numpy.searchsorted(times, t_mid)
+    assert trend[i_before] <= 0 <= trend[i_after], 'trend crosses zero at the centre of the fit period'
+    clim = comps['climatology'].data
+    assert numpy.allclose(clim[times.month == 1], clim[times.month == 1][0]), 'climatology is one value per calendar month'
+
+    # same signal, harmonic seasonal model: the step-like monthly cycle is not a pure 2-harmonic signal, so
+    # the anomaly is not zero, but the trend slope is still recovered to good accuracy
+    comps_h = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=2, trend='linear', return_components=True)
+    slope = numpy.polyfit(t, comps_h['trend'].data, 1)[0]
+    assert abs(slope - 0.3) < 0.05
+
+    # a record that is a whole number of years: sequential and joint estimates coincide
+    times = _monthly_times(n=120)
+    t = _years(times)
+    da = _series(5 + 0.3 * t + numpy.array([3, 2, 1, 0, -1, -2, -3, -2, -1, 0, 1, 2], dtype=float)[times.month - 1], times)
+    comps = analysis.remove_seasonal_and_trend(da, seasonal='climatology', trend='linear', return_components=True)
+    assert numpy.allclose(comps['anomaly'].data, 0, atol=1e-8)
+    assert numpy.allclose(numpy.polyfit(t, comps['trend'].data, 1)[0], 0.3)
+
+
+def test_rsat_quadratic_trend():
+    times = _monthly_times(n=240)
+    t = _years(times)
+    da = _series(1 + 0.1 * t + 0.05 * t ** 2 + _harmonics(t), times)
+
+    comps = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=2, trend='quadratic', return_components=True)
+    assert numpy.allclose(comps['anomaly'].data, 0, atol=1e-7), 'quadratic baseline + harmonics recovered'
+    # the trend component is a quadratic in time with the right curvature (the linear/constant parts
+    # depend on where the fit is centred, the curvature does not)
+    assert numpy.isclose(numpy.polyfit(t, comps['trend'].data, 2)[0], 0.05)
+    assert numpy.allclose(comps['anomaly'].data + comps['climatology'].data + comps['trend'].data, da.data), 'components sum to the input'
+
+    # a linear trend can't absorb the curvature
+    anom_lin = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=2, trend='linear')
+    assert numpy.abs(anom_lin.data).max() > 1, 'residual curvature is left in the anomaly'
+    assert numpy.isclose(numpy.polyfit(t, anom_lin.data, 2)[0], 0.05, atol=1e-6), 'and it is exactly the unmodelled quadratic term'
+
+    # climatology + quadratic also works
+    da_c = _series(1 + 0.1 * t + 0.05 * t ** 2 + numpy.arange(12, dtype=float)[times.month - 1], times)
+    anom_c = analysis.remove_seasonal_and_trend(da_c, seasonal='climatology', trend='quadratic')
+    assert numpy.allclose(anom_c.data, 0, atol=1e-7)
+
+
+def test_rsat_fit_period():
+    times = _monthly_times(n=240)  # 2000-2019
+    t = _years(times)
+    base = 2 + 0.1 * t + _harmonics(t)
+    # a 1-unit shift after 2010 that must survive as anomaly when the model is fit to 2000-2009 only
+    shift = numpy.where(times >= pandas.Timestamp('2010-01-01'), 1.0, 0.0)
+    da = _series(base + shift, times)
+
+    anom = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=2, trend='linear',
+                                              fit_period=('2000-01-01', '2009-12-31'))
+    first, second = times < pandas.Timestamp('2010-01-01'), times >= pandas.Timestamp('2010-01-01')
+    assert numpy.allclose(anom.data[first], 0, atol=1e-8), 'anomaly is zero inside the fit period'
+    assert numpy.allclose(anom.data[second], 1, atol=1e-8), 'the fitted model is extrapolated over the whole record'
+
+    # fitting on the full record instead smears the shift into the trend and the anomaly
+    anom_full = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=2, trend='linear')
+    assert not numpy.allclose(anom_full.data[second], 1, atol=0.1)
+
+    # fit_period bounds are inclusive on both ends
+    anom_a = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', fit_period=('2000-01-01', '2009-12-01'))
+    anom_b = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', fit_period=('2000-01-01', '2009-12-31'))
+    assert numpy.allclose(anom_a.data, anom_b.data), 'a timestamp exactly on the end bound is included'
+    anom_c = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', fit_period=('2000-01-01', '2009-11-30'))
+    assert not numpy.allclose(anom_a.data, anom_c.data), 'dropping 2009-12-01 changes the fit'
+
+    with pytest.raises(ValueError, match='no time steps inside fit_period'):
+        analysis.remove_seasonal_and_trend(da, fit_period=('1990-01-01', '1990-12-31'))
+
+    # an unsampled calendar month in the fit period can't be given a climatology: those times come back NaN
+    daily = pandas.date_range('2000-01-01', '2001-12-31', freq='D')
+    td = _years(daily)
+    da_d = _series(numpy.arange(12, dtype=float)[daily.month - 1] + 0.2 * td, daily)
+    anom_d = analysis.remove_seasonal_and_trend(da_d, seasonal='climatology', trend='linear',
+                                                fit_period=('2000-01-01', '2000-06-30'))
+    in_months = daily.month <= 6
+    assert numpy.allclose(anom_d.data[in_months], 0, atol=1e-8), 'Jan-Jun are fit from the first half of 2000 and extrapolated to 2001'
+    assert numpy.all(numpy.isnan(anom_d.data[~in_months])), 'Jul-Dec never appear in the fit period -> NaN'
+    # daily data get a step-function monthly climatology
+    comps_d = analysis.remove_seasonal_and_trend(da_d, seasonal='climatology', trend=None, return_components=True)
+    jan = comps_d['climatology'].data[daily.month == 1]
+    assert numpy.allclose(jan, jan[0]), 'one climatology value per calendar month even with daily sampling'
+
+
+def test_rsat_nan_handling():
+    times = _monthly_times(n=120)
+    t = _years(times)
+    signal = 4 + 0.2 * t + _harmonics(t)
+    field = numpy.tile(signal, (4, 1))  # (latitude, timestamp)
+    gaps = [5, 6, 40, 77]
+    field[1, gaps] = numpy.nan                 # a few gaps
+    field[2, :] = numpy.nan                    # nothing at all
+    field[3, 4:] = numpy.nan                   # 4 samples: fewer than the 6 model parameters
+    da = xarray.DataArray(field, dims=['latitude', 'timestamp'], coords={'latitude': [0, 1, 2, 3], 'timestamp': times})
+
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        comps = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=2, trend='linear', return_components=True)
+
+    assert comps['anomaly'].dims == ('latitude', 'timestamp'), 'dims order is preserved'
+    a = comps['anomaly'].data
+    assert numpy.allclose(a[0], 0, atol=1e-8), 'complete series'
+    ok = numpy.ones(120, dtype=bool); ok[gaps] = False
+    assert numpy.allclose(a[1, ok], 0, atol=1e-8), 'gappy series is fit on its valid samples'
+    assert numpy.all(numpy.isnan(a[1, gaps])), 'anomaly is NaN where the input is NaN'
+    assert numpy.allclose(comps['climatology'].data[1], comps['climatology'].data[0], atol=1e-8), 'gapped and complete fits agree on an exact signal'
+    assert numpy.allclose(comps['trend'].data[1], comps['trend'].data[0], atol=1e-8)
+    assert numpy.all(numpy.isnan(a[2])) and numpy.all(numpy.isnan(comps['climatology'].data[2])), 'all-NaN series stays NaN'
+    assert numpy.all(numpy.isnan(a[3])), 'too few samples to fit -> NaN rather than a garbage fit'
+
+    # gaps that fall outside the fit period don't demote a series to the per-point path, and the result is the same
+    field2 = numpy.tile(signal, (2, 1))
+    field2[1, 100:105] = numpy.nan
+    da2 = xarray.DataArray(field2, dims=['latitude', 'timestamp'], coords={'latitude': [0, 1], 'timestamp': times})
+    comps2 = analysis.remove_seasonal_and_trend(da2, seasonal='harmonic', trend='linear', fit_period=('2000-01-01', '2004-12-31'), return_components=True)
+    assert numpy.allclose(comps2['climatology'].data[0], comps2['climatology'].data[1])
+    assert numpy.all(numpy.isnan(comps2['anomaly'].data[1, 100:105])) and numpy.allclose(comps2['anomaly'].data[1, 105:], 0, atol=1e-8)
+
+    # climatology mode on a gappy series equals per-month means of the available samples
+    rng = numpy.random.default_rng(3)
+    y = rng.normal(size=120); y[[3, 15, 27]] = numpy.nan
+    da3 = _series(y, times)
+    anom3 = analysis.remove_seasonal_and_trend(da3, seasonal='climatology')
+    expected = da3.groupby('timestamp.month') - da3.groupby('timestamp.month').mean()
+    assert numpy.allclose(anom3.data, expected.data, equal_nan=True)
+
+
+def test_rsat_field_layout_and_smoothing():
+    times = _monthly_times(n=48)
+    t = _years(times)
+    rng = numpy.random.default_rng(4)
+    noise = rng.normal(size=(48, 2, 3))
+    field = (1 + _harmonics(t))[:, None, None] + noise
+    da = xarray.DataArray(field, dims=['timestamp', 'latitude', 'longitude'],
+                          coords={'timestamp': times, 'latitude': [10, 20], 'longitude': [100, 110, 120]})
+
+    # time-first layout: every grid point is fit separately and comes back in place
+    comps = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=2, return_components=True)
+    assert comps['anomaly'].dims == da.dims and comps['climatology'].dims == da.dims
+    for j in range(2):
+        for i in range(3):
+            single = analysis.remove_seasonal_and_trend(da.isel(latitude=j, longitude=i), seasonal='harmonic', n_harmonics=2)
+            assert numpy.allclose(comps['anomaly'].data[:, j, i], single.data), 'field fit equals per-series fit'
+    assert not numpy.allclose(comps['climatology'].data[:, 0, 0], comps['climatology'].data[:, 1, 2]), 'noise makes each grid point its own fit'
+
+    # a custom time dimension name
+    da_t = da.rename({'timestamp': 'time'})
+    anom_t = analysis.remove_seasonal_and_trend(da_t, time_dim='time', seasonal='harmonic', n_harmonics=2)
+    assert numpy.allclose(anom_t.data, comps['anomaly'].data)
+
+    # integer input is promoted to float
+    da_int = xarray.DataArray(numpy.arange(48), dims=['timestamp'], coords={'timestamp': times})
+    assert analysis.remove_seasonal_and_trend(da_int, seasonal=None, trend='linear').dtype.kind == 'f'
+
+    # smoothing is a centred rolling mean of the anomaly, with NaN at the ends
+    s = da.isel(latitude=0, longitude=0)
+    raw = analysis.remove_seasonal_and_trend(s, seasonal='harmonic', n_harmonics=2)
+    smooth = analysis.remove_seasonal_and_trend(s, seasonal='harmonic', n_harmonics=2, smooth_window=5)
+    expected = raw.rolling(timestamp=5, center=True).mean()
+    assert numpy.allclose(smooth.data, expected.data, equal_nan=True)
+    assert numpy.all(numpy.isnan(smooth.data[:2])) and numpy.all(numpy.isnan(smooth.data[-2:])), 'window edges are NaN'
+    assert numpy.allclose(smooth.data[2:-2], numpy.convolve(raw.data, numpy.ones(5) / 5, mode='valid'))
+    assert smooth.dims == s.dims
+
+
+def test_rsat_validation():
+    times = _monthly_times(n=24)
+    da = _series(numpy.arange(24, dtype=float), times)
+    with pytest.raises(ValueError, match="seasonal must be"):
+        analysis.remove_seasonal_and_trend(da, seasonal='monthly')
+    with pytest.raises(ValueError, match="trend must be"):
+        analysis.remove_seasonal_and_trend(da, trend='cubic')
+
+    # the sample count must exceed the number of fitted parameters; otherwise the result is silently NaN
+    short = _series(numpy.arange(12, dtype=float), _monthly_times(n=12))
+    assert numpy.all(numpy.isnan(analysis.remove_seasonal_and_trend(short, seasonal='climatology').data)), '12 samples, 12 monthly means: not enough'
+    thirteen = _series(numpy.arange(13, dtype=float), _monthly_times(n=13))
+    assert numpy.isfinite(analysis.remove_seasonal_and_trend(thirteen, seasonal='climatology').data).all(), '13 samples, 12 parameters: fits'
+    assert numpy.all(numpy.isnan(analysis.remove_seasonal_and_trend(thirteen, seasonal='climatology', trend='linear').data)), '13 samples, 13 parameters: not enough'
