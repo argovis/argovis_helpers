@@ -76,8 +76,8 @@ def interpolate_to_levels(levels_raw, var_raw, levels_interp):
     flag = 0
     pressure, variable, flag = tidy_profile(levels_raw, var_raw, flag)
 
-    # some truly pathological profiles will have no levels left at this point
-    if len(pressure) == 0:
+    # some truly pathological profiles will have 0 or 1 levels left at this point, interpolation impossible by construction
+    if len(pressure) < 2:
         interp = numpy.ma.masked_array(numpy.full(len(levels_interp), numpy.nan), mask=True)
         flag = flag | 32
         return interp, flag
