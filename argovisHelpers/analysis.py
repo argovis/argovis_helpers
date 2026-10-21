@@ -225,9 +225,13 @@ def bin_profiles(
     lon_range=None,
     lat_step=None,
     lon_step=None,
+    time_bin=None,
+    time_range=None,
+    time_step=None,
 ):
     """
-    Average profiles into rectangular latitude/longitude cells.
+    Average profiles into rectangular latitude/longitude cells, optionally
+    also binned in time.
 
     This is a plain bin mean, NOT a mapped/gridded product: there is no
     weighting by distance or time, no mapping error, and no correction for
@@ -262,6 +266,33 @@ def bin_profiles(
       * latitude:  -90 to 90
       * longitude:   0 to 360
 
+    Time binning is off unless `time_bin` is given. When it is, profiles
+    are additionally sorted into time bins, and the result gains a leading
+    `time` dimension. Two kinds of time bin are supported:
+
+      * fixed-width bins: `time_bin` is anything `pandas.Timedelta`
+        understands, e.g. '30D', '7D', '12h', or a `pandas.Timedelta`.
+        These behave exactly like the spatial bins: `time_step` defaults
+        to `time_bin`, and a smaller `time_step` gives overlapping bins
+        (e.g. time_bin='30D', time_step='10D' is a 30-day running mean
+        sampled every 10 days).
+
+      * calendar bins: `time_bin` is a pandas offset alias anchored to a
+        calendar boundary, e.g. 'MS' (calendar months), '3MS' (calendar
+        quarters), 'QS-DEC' (quarters starting in December, i.e. DJF,
+        MAM, JJA, SON), 'YS' (calendar years), 'W' (weeks ending Sunday).
+        Calendar bins have unequal widths, so `time_step` is not allowed
+        and bins never overlap. Note that '7D' is a fixed-width bin while
+        'W' is a calendar bin.
+
+    If `time_range` is None, the bins cover the span of the profiles'
+    timestamps: the first bin begins at the earliest timestamp (fixed
+    width) or at the calendar boundary on or before it (calendar), and
+    bins are added until the latest timestamp is covered. An explicit
+    `time_range` must fit the bins exactly, as for latitude and
+    longitude; for calendar bins both ends must lie on the calendar
+    boundary (e.g. the first of a month for 'MS').
+
     Parameters
     ----------
     profiles : list of Profile
@@ -295,11 +326,31 @@ def bin_profiles(
         Distance between adjacent longitude bin centers. Defaults to
         `lon_bin`, giving non-overlapping bins.
 
+    time_bin : str or pandas.Timedelta, optional
+        Time bin width: a fixed duration ('30D') or a calendar period
+        ('MS', '3MS', 'YS'). Default None, meaning no time binning.
+
+    time_range : (start, end), optional
+        Time range covered by the bins; anything `pandas.Timestamp`
+        accepts. Default is the span of the profiles' timestamps.
+
+    time_step : str or pandas.Timedelta, optional
+        Distance between adjacent time bin centers, for fixed-width time
+        bins only. Defaults to `time_bin`, giving non-overlapping bins.
+
     Returns
     -------
     xarray.Dataset
-        `<varname>` has dimensions (latitude, longitude, level).
-        `n_profiles` has dimensions (latitude, longitude).
+        Without time binning:
+          `<varname>` has dimensions (latitude, longitude, level).
+          `n_profiles` has dimensions (latitude, longitude).
+
+        With time binning:
+          `<varname>` has dimensions (time, latitude, longitude, level).
+          `n_profiles` has dimensions (time, latitude, longitude).
+          `time_bnds` has dimensions (time, bnds) and holds the low and
+          high edge of each time bin; the `time` coordinate is the bin
+          center.
 
         Empty cells contain NaN and have n_profiles = 0.
 
@@ -310,6 +361,13 @@ def bin_profiles(
 
     Steps larger than bin widths are not allowed, since they would leave
     gaps between cells.
+
+    Bins are half-open [low, high) in every dimension, except that the
+    final latitude bin and the final time bin also include their upper
+    edge, so a profile exactly at the end of the range is not lost.
+    Longitude stays half-open because 360 is the same meridian as 0.
+
+    Every profile must carry a timestamp when time binning is requested.
     """
 
     levels = numpy.asarray(levels, dtype=float)
@@ -442,9 +500,12 @@ def bin_profiles(
     #
     # This makes the intended geometry obvious when somebody reads this
     # code six months from now.
+    #
+    # The same routine serves fixed-width time bins, with everything
+    # expressed in seconds instead of degrees.
     # ------------------------------------------------------------------
 
-    def make_centers(range_min, range_max, bin_width, step, name):
+    def make_centers(range_min, range_max, bin_width, step, name, units='degrees'):
 
         range_width = range_max - range_min
 
@@ -452,8 +513,8 @@ def bin_profiles(
             bin_width, range_width
         ):
             raise ValueError(
-                f"{name}_bin ({bin_width} degrees) is wider than the "
-                f"requested {name} range ({range_width} degrees)"
+                f"{name}_bin ({bin_width} {units}) is wider than the "
+                f"requested {name} range ({range_width} {units})"
             )
 
         # The first bin is anchored directly against the lower range edge.
@@ -484,9 +545,9 @@ def bin_profiles(
             if not numpy.isclose(n_steps_float, n_steps):
                 raise ValueError(
                     f"{name} bins do not fit the requested range exactly: "
-                    f"range width is {range_width} degrees, "
-                    f"bin width is {bin_width} degrees, and "
-                    f"step is {step} degrees. The first bin can begin at "
+                    f"range width is {range_width} {units}, "
+                    f"bin width is {bin_width} {units}, and "
+                    f"step is {step} {units}. The first bin can begin at "
                     f"the range minimum, but no bin lands exactly on the "
                     f"range maximum."
                 )
@@ -588,11 +649,209 @@ def bin_profiles(
     lon_unwrapped = lon_min + ((lon - lon_min) % 360)
 
     # ------------------------------------------------------------------
+    # Time bins.
+    #
+    # Everything below produces two arrays of bin edges, `time_low` and
+    # `time_high` (datetime64[ns]), one entry per time bin. When no time
+    # binning was requested there is a single bin spanning all time, and
+    # the time dimension is squeezed out of the result at the end.
+    # ------------------------------------------------------------------
+
+    if time_bin is None:
+
+        if time_step is not None:
+            raise ValueError("time_step requires time_bin")
+
+        if time_range is not None:
+            raise ValueError("time_range requires time_bin")
+
+        # One bin covering everything; no timestamps needed.
+        in_time_bins = [numpy.ones(len(profiles), dtype=bool)]
+        time_low = time_high = None
+
+    else:
+
+        # Every profile must have a timestamp for time binning.
+        timestamps = []
+        for p in profiles:
+            if p.rawdata.get('timestamp') is None:
+                raise ValueError(
+                    f"profile {p.id}: no timestamp — every profile must "
+                    "carry one when time_bin is set"
+                )
+            timestamps.append(numpy.datetime64(p.timestamp, 'ns'))
+
+        timestamps = numpy.asarray(timestamps, dtype='datetime64[ns]')
+
+        # Classify time_bin: fixed-width (Timedelta) or calendar (offset).
+        time_bin_delta = None
+        time_bin_offset = None
+
+        #
+        # Strings go through to_offset rather than Timedelta: Timedelta
+        # happily reads '3MS' as three milliseconds, whereas to_offset
+        # reads it as three calendar months, which is what anyone
+        # writing '3MS' means.
+        if isinstance(time_bin, str):
+            try:
+                time_bin_offset = pandas.tseries.frequencies.to_offset(time_bin)
+            except (ValueError, TypeError):
+                raise ValueError(
+                    f"time_bin={time_bin!r} is neither a duration "
+                    "('30D', pandas.Timedelta) nor a calendar offset "
+                    "alias ('MS', '3MS', 'YS')"
+                )
+
+            if isinstance(time_bin_offset, pandas.tseries.offsets.Tick):
+                # e.g. '30D', '12h': a fixed duration after all.
+                time_bin_delta = pandas.Timedelta(time_bin_offset)
+                time_bin_offset = None
+        else:
+            try:
+                time_bin_delta = pandas.Timedelta(time_bin)
+            except (ValueError, TypeError):
+                raise ValueError(
+                    f"time_bin={time_bin!r} is neither a duration "
+                    "('30D', pandas.Timedelta) nor a calendar offset "
+                    "alias ('MS', '3MS', 'YS')"
+                )
+
+        if time_range is not None:
+            if len(time_range) != 2:
+                raise ValueError("time_range must be (start, end)")
+            t_min = pandas.Timestamp(time_range[0])
+            t_max = pandas.Timestamp(time_range[1])
+            if t_min.tzinfo is not None or t_max.tzinfo is not None:
+                raise ValueError(
+                    "time_range must be timezone-naive, like profile "
+                    "timestamps"
+                )
+            if not t_min < t_max:
+                raise ValueError("time_range must satisfy start < end")
+        elif len(timestamps) == 0:
+            raise ValueError(
+                "time_range must be given explicitly when there are no "
+                "profiles to infer it from"
+            )
+        else:
+            t_min = pandas.Timestamp(timestamps.min())
+            t_max = pandas.Timestamp(timestamps.max())
+
+        if time_bin_delta is not None:
+            # --- fixed-width time bins, same geometry as lat/lon -------
+
+            if time_bin_delta <= pandas.Timedelta(0):
+                raise ValueError("time_bin must be positive")
+
+            if time_step is None:
+                time_step_delta = time_bin_delta
+            else:
+                time_step_delta = pandas.Timedelta(time_step)
+
+            if time_step_delta <= pandas.Timedelta(0):
+                raise ValueError("time_step must be positive")
+
+            if time_step_delta > time_bin_delta:
+                raise ValueError(
+                    "time_step cannot exceed time_bin; that would leave "
+                    "gaps between time bins"
+                )
+
+            bin_s = time_bin_delta.total_seconds()
+            step_s = time_step_delta.total_seconds()
+
+            if time_range is None:
+                # Anchor the first bin at the earliest profile and add
+                # bins until the latest profile is covered.
+                span_s = (t_max - t_min).total_seconds()
+                n_extra = max(0, math.ceil((span_s - bin_s) / step_s))
+                t_max = t_min + time_bin_delta + n_extra * time_step_delta
+
+            centers_s = make_centers(
+                0.0,
+                (t_max - t_min).total_seconds(),
+                bin_s,
+                step_s,
+                "time",
+                units="seconds",
+            )
+
+            time_low = numpy.asarray(
+                [t_min + pandas.Timedelta(seconds=c - bin_s / 2.0) for c in centers_s],
+                dtype='datetime64[ns]',
+            )
+            time_high = numpy.asarray(
+                [t_min + pandas.Timedelta(seconds=c + bin_s / 2.0) for c in centers_s],
+                dtype='datetime64[ns]',
+            )
+
+            time_bin_attr = str(time_bin_delta)
+            time_step_attr = str(time_step_delta)
+
+        else:
+            # --- calendar time bins --------------------------------------
+
+            if time_step is not None:
+                raise ValueError(
+                    "time_step is only supported for fixed-width time "
+                    "bins; calendar bins such as 'MS' never overlap"
+                )
+
+            if time_range is None:
+                # Start at the calendar boundary on or before the earliest
+                # profile, then step forward one bin at a time until the
+                # latest profile is covered. Stepping (rather than
+                # rolling t_max forward) keeps multi-period bins such as
+                # '3MS' on the lattice defined by the first edge.
+                edges = [time_bin_offset.rollback(t_min)]
+                while edges[-1] <= t_max:
+                    edges.append(edges[-1] + time_bin_offset)
+                edges = pandas.DatetimeIndex(edges)
+
+            else:
+                edges = pandas.date_range(t_min, t_max, freq=time_bin_offset)
+
+                if (
+                    len(edges) < 2
+                    or edges[0] != t_min
+                    or edges[-1] != t_max
+                ):
+                    raise ValueError(
+                        f"time bins do not fit the requested range exactly: "
+                        f"with time_bin={time_bin!r}, both ends of time_range "
+                        f"must lie on the calendar boundary, and the range "
+                        f"must contain a whole number of bins "
+                        f"(got {t_min} to {t_max})"
+                    )
+
+            time_low = numpy.asarray(edges[:-1], dtype='datetime64[ns]')
+            time_high = numpy.asarray(edges[1:], dtype='datetime64[ns]')
+
+            time_bin_attr = time_bin_offset.freqstr
+            time_step_attr = time_bin_offset.freqstr
+
+        # Half-open [low, high), with the final bin closed on top so a
+        # profile exactly at the end of the range is not lost.
+        in_time_bins = []
+        for k in range(len(time_low)):
+            if k == len(time_low) - 1:
+                in_time_bins.append(
+                    (timestamps >= time_low[k]) & (timestamps <= time_high[k])
+                )
+            else:
+                in_time_bins.append(
+                    (timestamps >= time_low[k]) & (timestamps < time_high[k])
+                )
+
+    n_time = len(in_time_bins)
+
+    # ------------------------------------------------------------------
     # Allocate output arrays
     # ------------------------------------------------------------------
 
     mean = numpy.full(
         (
+            n_time,
             len(lat_centers),
             len(lon_centers_unwrapped),
             len(levels),
@@ -603,6 +862,7 @@ def bin_profiles(
 
     count = numpy.zeros(
         (
+            n_time,
             len(lat_centers),
             len(lon_centers_unwrapped),
         ),
@@ -613,90 +873,140 @@ def bin_profiles(
     # Average profiles in each cell
     # ------------------------------------------------------------------
 
-    for j, lat_center in enumerate(lat_centers):
+    for k, in_time in enumerate(in_time_bins):
 
-        lat_low = lat_center - lat_bin / 2.0
-        lat_high = lat_center + lat_bin / 2.0
+        for j, lat_center in enumerate(lat_centers):
 
-        # Normally bins are half-open [low, high). For the final latitude
-        # bin, include the upper edge too so a profile exactly at +90
-        # degrees is not lost.
-        if j == len(lat_centers) - 1:
-            in_lat = (
-                (lat >= lat_low)
-                & (lat <= lat_high)
-            )
-        else:
-            in_lat = (
-                (lat >= lat_low)
-                & (lat < lat_high)
-            )
+            lat_low = lat_center - lat_bin / 2.0
+            lat_high = lat_center + lat_bin / 2.0
 
-        for i, lon_center in enumerate(lon_centers_unwrapped):
+            # Normally bins are half-open [low, high). For the final latitude
+            # bin, include the upper edge too so a profile exactly at +90
+            # degrees is not lost.
+            if j == len(lat_centers) - 1:
+                in_lat = (
+                    (lat >= lat_low)
+                    & (lat <= lat_high)
+                )
+            else:
+                in_lat = (
+                    (lat >= lat_low)
+                    & (lat < lat_high)
+                )
 
-            lon_low = lon_center - lon_bin / 2.0
-            lon_high = lon_center + lon_bin / 2.0
+            for i, lon_center in enumerate(lon_centers_unwrapped):
 
-            # Longitude stays half-open. Because profile longitudes have
-            # been normalized to [0, 360), 360 itself is represented by 0.
-            in_lon = (
-                (lon_unwrapped >= lon_low)
-                & (lon_unwrapped < lon_high)
-            )
+                lon_low = lon_center - lon_bin / 2.0
+                lon_high = lon_center + lon_bin / 2.0
 
-            in_cell = keep & in_lat & in_lon
+                # Longitude stays half-open. Because profile longitudes have
+                # been normalized to [0, 360), 360 itself is represented by 0.
+                in_lon = (
+                    (lon_unwrapped >= lon_low)
+                    & (lon_unwrapped < lon_high)
+                )
 
-            count[j, i] = numpy.count_nonzero(in_cell)
+                in_cell = keep & in_time & in_lat & in_lon
 
-            if count[j, i]:
-                with warnings.catch_warnings():
-                    # Some vertical levels may be NaN for every profile
-                    # in an otherwise populated cell.
-                    warnings.simplefilter(
-                        'ignore',
-                        RuntimeWarning,
-                    )
+                count[k, j, i] = numpy.count_nonzero(in_cell)
 
-                    mean[j, i] = numpy.nanmean(
-                        data[in_cell],
-                        axis=0,
-                    )
+                if count[k, j, i]:
+                    with warnings.catch_warnings():
+                        # Some vertical levels may be NaN for every profile
+                        # in an otherwise populated cell.
+                        warnings.simplefilter(
+                            'ignore',
+                            RuntimeWarning,
+                        )
+
+                        mean[k, j, i] = numpy.nanmean(
+                            data[in_cell],
+                            axis=0,
+                        )
 
     # ------------------------------------------------------------------
     # Package as xarray
     # ------------------------------------------------------------------
 
+    attrs = {
+        'method': (
+            'bin mean of individual profiles in rectangular '
+            'latitude/longitude cells — not a mapped product'
+        ),
+        'lat_bin': lat_bin,
+        'lon_bin': lon_bin,
+        'lat_step': lat_step,
+        'lon_step': lon_step,
+        'lat_range': (lat_min, lat_max),
+        'lon_range': (
+            lon_min,
+            lon_max,
+        ),
+    }
+
+    if time_bin is None:
+
+        # No time binning requested: drop the singleton time axis so the
+        # result is identical to what this function has always returned.
+        return xarray.Dataset(
+            {
+                varname: (
+                    ('latitude', 'longitude', 'level'),
+                    mean[0],
+                ),
+                'n_profiles': (
+                    ('latitude', 'longitude'),
+                    count[0],
+                ),
+            },
+            coords={
+                'latitude': lat_centers,
+                'longitude': lon_centers,
+                'level': levels,
+            },
+            attrs=attrs,
+        )
+
+    # Bin centers as the time coordinate; edges kept alongside, CF-style,
+    # since calendar bins have unequal widths and the centers alone would
+    # not recover them.
+    time_centers = time_low + (time_high - time_low) / 2
+
+    attrs.update(
+        {
+            'method': (
+                'bin mean of individual profiles in rectangular '
+                'latitude/longitude/time cells — not a mapped product'
+            ),
+            'time_bin': time_bin_attr,
+            'time_step': time_step_attr,
+            'time_range_start': str(pandas.Timestamp(time_low[0])),
+            'time_range_end': str(pandas.Timestamp(time_high[-1])),
+        }
+    )
+
     return xarray.Dataset(
         {
             varname: (
-                ('latitude', 'longitude', 'level'),
+                ('time', 'latitude', 'longitude', 'level'),
                 mean,
             ),
             'n_profiles': (
-                ('latitude', 'longitude'),
+                ('time', 'latitude', 'longitude'),
                 count,
+            ),
+            'time_bnds': (
+                ('time', 'bnds'),
+                numpy.stack([time_low, time_high], axis=1),
             ),
         },
         coords={
+            'time': time_centers,
             'latitude': lat_centers,
             'longitude': lon_centers,
             'level': levels,
         },
-        attrs={
-            'method': (
-                'bin mean of individual profiles in rectangular '
-                'latitude/longitude cells — not a mapped product'
-            ),
-            'lat_bin': lat_bin,
-            'lon_bin': lon_bin,
-            'lat_step': lat_step,
-            'lon_step': lon_step,
-            'lat_range': (lat_min, lat_max),
-            'lon_range': (
-                lon_min,
-                lon_max,
-            ),
-        },
+        attrs=attrs,
     )
 
 def remove_seasonal_and_trend(da, time_dim='timestamp', seasonal='climatology',
