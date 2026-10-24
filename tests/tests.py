@@ -829,12 +829,16 @@ def test_bin_profiles_time_fixed_width():
                                 time_bin=pandas.Timedelta(days=30), time_range=('2020-01-01', '2020-03-01'))
     assert ds2.identical(ds)
 
-    # default time_range: first bin anchored at the earliest profile, bins added until the latest is covered
+    # default time_range: first bin anchored at the earliest profile, bins added until the latest is covered;
+    # d sits exactly 60 days in, i.e. on a bin edge, so it opens a third bin rather than closing the second
     ds3 = analysis.bin_profiles(profiles[:4], levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1), time_bin='30D')
-    assert ds3.sizes['time'] == 2
+    assert ds3.sizes['time'] == 3
     assert ds3['time_bnds'].data[0, 0] == numpy.datetime64('2020-01-01', 'ns')
-    assert ds3['time_bnds'].data[-1, 1] >= numpy.datetime64('2020-03-01', 'ns'), 'latest profile must be covered'
-    assert ds3['n_profiles'].data.sum() == 4, 'every profile lands in exactly one non-overlapping bin'
+    assert ds3['time_bnds'].data[-1, 0] == numpy.datetime64('2020-03-01', 'ns') and ds3['time_bnds'].data[-1, 1] == numpy.datetime64('2020-03-31', 'ns')
+    assert numpy.array_equal(ds3['n_profiles'].data[:, 0, 0], [2, 1, 1]), 'every profile lands in exactly one non-overlapping bin'
+    # ... whereas a latest profile strictly inside the last bin does not add one
+    ds3b = analysis.bin_profiles(profiles[:3], levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1), time_bin='30D')
+    assert ds3b.sizes['time'] == 2 and numpy.array_equal(ds3b['n_profiles'].data[:, 0, 0], [2, 1])
 
     # no-time call is unchanged: no time dimension, no time_bnds, no time attrs
     ds4 = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1))
@@ -891,6 +895,23 @@ def test_bin_profiles_time_calendar():
     ds7 = analysis.bin_profiles(profiles + [_make_profile('apr', 0.5, 0.5, [40], timestamp='2020-04-01T00:00:00Z')],
                                 levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1), time_bin='3MS')
     assert ds7.sizes['time'] == 2 and numpy.array_equal(ds7['n_profiles'].data[:, 0, 0], [4, 1])
+
+    # calendar bins start at midnight regardless of the profiles' clock times
+    odd_hours = [
+        _make_profile('a', 0.5, 0.5, [1], timestamp='2020-01-15T06:30:00Z'),
+        _make_profile('b', 0.5, 0.5, [3], timestamp='2020-02-01T00:00:00Z'),   # first instant of Feb -> Feb, not Jan
+        _make_profile('c', 0.5, 0.5, [5], timestamp='2020-02-29T23:45:00Z'),
+    ]
+    ds8 = analysis.bin_profiles(odd_hours, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1), time_bin='MS')
+    assert numpy.array_equal(ds8['time_bnds'].data[:, 0], numpy.array(['2020-01-01', '2020-02-01'], dtype='datetime64[ns]')), 'edges at midnight, not 06:30'
+    assert numpy.array_equal(ds8['time_bnds'].data[:, 1], numpy.array(['2020-02-01', '2020-03-01'], dtype='datetime64[ns]'))
+    assert numpy.array_equal(ds8['n_profiles'].data[:, 0, 0], [1, 2])
+    ds9 = analysis.bin_profiles(odd_hours, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1), time_bin='W-MON')
+    assert all(pandas.Timestamp(t).weekday() == 0 and pandas.Timestamp(t).time() == datetime.time(0) for t in ds9['time_bnds'].data.ravel()), 'weekly edges are Monday midnights'
+    # ... and an explicit calendar range with a clock time is rejected
+    with pytest.raises(ValueError, match='midnight'):
+        analysis.bin_profiles(odd_hours, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1),
+                              time_bin='MS', time_range=('2020-01-01T06:30', '2020-03-01T06:30'))
 
     # a range not on the calendar boundary does not fit
     with pytest.raises(ValueError, match='do not fit'):
@@ -1010,6 +1031,172 @@ def test_bin_profiles_time_and_space_together():
         back = xarray.open_dataset(os.path.join(d, 'x.nc'))
         assert back.sizes['time'] == 2 and 'time_bnds' in back
         back.close()
+
+
+def test_bin_profiles_n_obs():
+    # n_obs counts non-NaN values level by level; n_profiles counts profiles per cell
+    levels = [0, 10, 20]
+    profiles = [
+        _make_profile('a', 0.5, 0.5, [1, 2, numpy.nan]),
+        _make_profile('b', 0.5, 0.5, [3, numpy.nan, numpy.nan]),
+        _make_profile('c', 0.5, 0.5, [5, 6, 7]),
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 2))
+    assert ds['n_obs'].dims == ('latitude', 'longitude', 'level')
+    assert numpy.array_equal(ds['n_obs'].data[0, 0], [3, 2, 1]), 'per-level counts of values that entered the mean'
+    assert numpy.array_equal(ds['n_obs'].data[0, 1], [0, 0, 0]), 'empty cell'
+    assert ds['n_profiles'].data[0, 0] == 3
+    assert numpy.allclose(ds['temperature'].data[0, 0], [3, 4, 7]), 'nanmean over the available values'
+    assert numpy.all(ds['n_obs'].data <= ds['n_profiles'].data[..., None]), 'n_obs never exceeds n_profiles'
+
+    # with time binning the same, with a leading time dim
+    stamped = [_make_profile(p.id, 0.5, 0.5, [1, numpy.nan, 3], timestamp=f'2020-0{k+1}-10T00:00:00Z') for k, p in enumerate(profiles)]
+    ds = analysis.bin_profiles(stamped, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1), time_bin='MS')
+    assert ds['n_obs'].dims == ('time', 'latitude', 'longitude', 'level')
+    assert numpy.array_equal(ds['n_obs'].data[:, 0, 0, :], [[1, 0, 1]] * 3)
+
+
+# ---------------------------------------------------------------------------
+# analysis.climatology
+# ---------------------------------------------------------------------------
+
+def _stamped(pid, values, when, lon=0.5, lat=0.5):
+    return _make_profile(pid, lon, lat, values, timestamp=when)
+
+
+def test_climatology_matches_pooling():
+    # Weighted by n_obs, the climatology of monthly bins must equal binning all the
+    # profiles of each calendar month together directly. Uneven sampling across years
+    # and level-wise NaNs are both present so that weighted and unweighted differ.
+    levels = [0, 100]
+    profiles = [
+        _stamped('j19',  [10, 10],         '2019-01-10T00:00:00Z'),
+        _stamped('j20a', [1, numpy.nan],   '2020-01-05T00:00:00Z'),
+        _stamped('j20b', [2, 2],           '2020-01-15T00:00:00Z'),
+        _stamped('j20c', [3, 3],           '2020-01-25T00:00:00Z'),
+        _stamped('f19',  [5, 5],           '2019-02-10T00:00:00Z'),
+        _stamped('f21',  [7, numpy.nan],   '2021-02-20T00:00:00Z'),
+    ]
+    kw = dict(lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1))
+    monthly = analysis.bin_profiles(profiles, levels, time_bin='MS', time_range=('2019-01-01', '2022-01-01'), **kw)
+    clim = analysis.climatology(monthly, by='month')
+
+    assert clim['temperature'].dims == ('month', 'latitude', 'longitude', 'level')
+    assert numpy.array_equal(clim['month'].data, numpy.arange(1, 13)), 'all 12 months present even when unsampled'
+
+    # pooled reference: every January profile in one bin, every February profile in one bin
+    jan = analysis.bin_profiles([p for p in profiles if p.timestamp.month == 1], levels, **kw)
+    feb = analysis.bin_profiles([p for p in profiles if p.timestamp.month == 2], levels, **kw)
+    assert numpy.allclose(clim['temperature'].sel(month=1).data, jan['temperature'].data), 'January climatology == pooled January bin'
+    assert numpy.allclose(clim['temperature'].sel(month=2).data, feb['temperature'].data), 'February climatology == pooled February bin'
+    assert numpy.allclose(clim['temperature'].sel(month=1).data[0, 0], [16 / 4, 15 / 3]), 'level 100 has only 3 values in January'
+    assert numpy.all(numpy.isnan(clim['temperature'].sel(month=slice(3, 12)).data)), 'unsampled months are NaN'
+
+    assert numpy.array_equal(clim['n_obs'].sel(month=1).data[0, 0], [4, 3])
+    assert numpy.array_equal(clim['n_profiles'].data[:, 0, 0], [4, 2] + [0] * 10)
+    assert numpy.array_equal(clim['n_bins'].data[:, 0, 0], [2, 2] + [0] * 10), 'two Januaries and two Februaries contributed'
+    assert clim.attrs['climatology_by'] == 'month' and clim.attrs['climatology_weighted'] == 1
+    assert clim.attrs['time_bin'] == 'MS', 'source attrs carried through'
+
+    # unweighted: every year counts equally -> mean of the two January bin means
+    flat = analysis.climatology(monthly, by='month', weighted=False)
+    assert numpy.isclose(flat['temperature'].sel(month=1).data[0, 0, 0], (10 + 2) / 2)
+    assert numpy.allclose(flat['temperature'].sel(month=1).data, monthly['temperature'].groupby('time.month').mean('time').sel(month=1).data)
+    assert flat.attrs['climatology_weighted'] == 0
+    assert numpy.array_equal(flat['n_obs'].data, clim['n_obs'].data), 'counts are reported the same way either way'
+
+
+def test_climatology_seasons_and_other_groupings():
+    levels = [0]
+    profiles = [
+        _stamped('dec', [1], '2019-12-15T00:00:00Z'), _stamped('jan', [3], '2020-01-15T00:00:00Z'),
+        _stamped('apr', [10], '2020-04-15T00:00:00Z'), _stamped('jul', [20], '2020-07-15T00:00:00Z'),
+        _stamped('oct_a', [30], '2020-10-15T00:00:00Z'), _stamped('oct_b', [50], '2021-10-15T00:00:00Z'),
+    ]
+    kw = dict(lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1))
+    monthly = analysis.bin_profiles(profiles, levels, time_bin='MS', **kw)
+
+    s = analysis.climatology(monthly, by='season')
+    assert list(s['season'].data) == ['DJF', 'MAM', 'JJA', 'SON'], 'seasons in calendar order, not alphabetical'
+    assert numpy.allclose(s['temperature'].data[:, 0, 0, 0], [2, 10, 20, 40])
+    assert numpy.array_equal(s['n_bins'].data[:, 0, 0], [2, 1, 1, 2])
+
+    # seasonal bins straight from bin_profiles give the same seasonal climatology
+    seasonal = analysis.bin_profiles(profiles, levels, time_bin='QS-DEC', **kw)
+    s2 = analysis.climatology(seasonal, by='season')
+    assert numpy.allclose(s2['temperature'].data, s['temperature'].data)
+
+    # daily bins nest inside every grouping
+    daily = analysis.bin_profiles(profiles, levels, time_bin='D', **kw)
+    d = analysis.climatology(daily, by='dayofyear')
+    assert d.sizes['dayofyear'] == 366 and d['n_profiles'].data.sum() == len(profiles)
+    # dayofyear shifts by one after Feb 29 in leap years: Oct 15 is day 289 in 2020 but 288 in 2021
+    assert numpy.isclose(d['temperature'].sel(dayofyear=289).data[0, 0, 0], 30) and numpy.isclose(d['temperature'].sel(dayofyear=288).data[0, 0, 0], 50)
+    w = analysis.climatology(daily, by='week')
+    assert w.sizes['week'] == 53 and w['n_profiles'].data.sum() == len(profiles)
+    assert numpy.allclose(analysis.climatology(daily, by='month')['temperature'].data, analysis.climatology(monthly, by='month')['temperature'].data, equal_nan=True), 'daily bins rolled up to months match monthly bins'
+
+    # the result round-trips through netCDF
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as tmp:
+        s.to_netcdf(os.path.join(tmp, 'clim.nc'))
+        back = xarray.open_dataset(os.path.join(tmp, 'clim.nc'))
+        assert list(back['season'].data) == ['DJF', 'MAM', 'JJA', 'SON']
+        back.close()
+
+
+def test_climatology_rejects_misaligned_bins():
+    levels = [0]
+    kw = dict(lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1))
+    profiles = [_stamped('a', [1], '2020-01-15T00:00:00Z'), _stamped('b', [3], '2020-06-15T00:00:00Z')]
+
+    # fixed 30-day bins straddle month boundaries
+    thirty = analysis.bin_profiles(profiles, levels, time_bin='30D', time_range=('2020-01-01', '2020-06-29'), **kw)
+    with pytest.raises(ValueError, match='straddles month'):
+        analysis.climatology(thirty, by='month')
+    # monthly bins are coarser than weeks or days
+    monthly = analysis.bin_profiles(profiles, levels, time_bin='MS', **kw)
+    with pytest.raises(ValueError, match='straddles week'):
+        analysis.climatology(monthly, by='week')
+    with pytest.raises(ValueError, match='straddles dayofyear'):
+        analysis.climatology(monthly, by='dayofyear')
+    # calendar quarters starting in January straddle the DJF/MAM seasons; QS-DEC does not
+    with pytest.raises(ValueError, match='straddles season'):
+        analysis.climatology(analysis.bin_profiles(profiles, levels, time_bin='QS', **kw), by='season')
+    analysis.climatology(analysis.bin_profiles(profiles, levels, time_bin='QS-DEC', **kw), by='season')
+    # a year is coarser than everything
+    with pytest.raises(ValueError, match='straddles month'):
+        analysis.climatology(analysis.bin_profiles(profiles, levels, time_bin='YS', **kw), by='month')
+    # overlapping bins would count profiles more than once
+    overlapping = analysis.bin_profiles(profiles, levels, time_bin='2D', time_step='1D', time_range=('2020-01-01', '2020-07-01'), **kw)
+    with pytest.raises(ValueError, match='overlap'):
+        analysis.climatology(overlapping, by='month')
+    # fixed-width bins that happen to nest are fine (12h bins never straddle a day, hence never a month)
+    analysis.climatology(analysis.bin_profiles(profiles, levels, time_bin='12h', time_range=('2020-01-01', '2020-07-01'), **kw), by='month')
+    # ... while 2-day bins from Jan 1 eventually straddle a month boundary (Jan 31 - Feb 2)
+    with pytest.raises(ValueError, match='straddles month'):
+        analysis.climatology(analysis.bin_profiles(profiles, levels, time_bin='2D', time_range=('2020-01-01', '2020-07-01'), **kw), by='month')
+
+
+def test_climatology_validation():
+    levels = [0]
+    kw = dict(lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1))
+    profiles = [_stamped('a', [1], '2020-01-15T00:00:00Z')]
+    monthly = analysis.bin_profiles(profiles, levels, time_bin='MS', **kw)
+    no_time = analysis.bin_profiles(profiles, levels, **kw)
+
+    with pytest.raises(ValueError, match="no 'time'"):
+        analysis.climatology(no_time)
+    with pytest.raises(ValueError, match='not supported'):
+        analysis.climatology(monthly, by='fortnight')
+    with pytest.raises(ValueError, match="no variable 'salinity'"):
+        analysis.climatology(monthly, varname='salinity')
+    # varname inference: ambiguous when two data variables are present, explicit works
+    two = monthly.assign(salinity=monthly['temperature'] * 2)
+    with pytest.raises(ValueError, match='could not infer varname'):
+        analysis.climatology(two)
+    assert numpy.allclose(analysis.climatology(two, varname='salinity')['salinity'].sel(month=1).data, 2)
+
 
 # ---------------------------------------------------------------------------
 # analysis.remove_seasonal_and_trend

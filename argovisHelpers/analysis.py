@@ -288,10 +288,13 @@ def bin_profiles(
     If `time_range` is None, the bins cover the span of the profiles'
     timestamps: the first bin begins at the earliest timestamp (fixed
     width) or at the calendar boundary on or before it (calendar), and
-    bins are added until the latest timestamp is covered. An explicit
+    bins are added until the latest timestamp is covered, a timestamp
+    exactly on a bin edge falling in the bin that starts there. An explicit
     `time_range` must fit the bins exactly, as for latitude and
-    longitude; for calendar bins both ends must lie on the calendar
-    boundary (e.g. the first of a month for 'MS').
+    longitude; for calendar bins both ends must lie at midnight on the
+    calendar boundary (e.g. 00:00 on the first of a month for 'MS').
+    Calendar bins always begin at midnight, whatever the clock time of
+    the profiles.
 
     Parameters
     ----------
@@ -344,15 +347,21 @@ def bin_profiles(
         Without time binning:
           `<varname>` has dimensions (latitude, longitude, level).
           `n_profiles` has dimensions (latitude, longitude).
+          `n_obs` has dimensions (latitude, longitude, level).
 
         With time binning:
           `<varname>` has dimensions (time, latitude, longitude, level).
           `n_profiles` has dimensions (time, latitude, longitude).
+          `n_obs` has dimensions (time, latitude, longitude, level).
           `time_bnds` has dimensions (time, bnds) and holds the low and
           high edge of each time bin; the `time` coordinate is the bin
           center.
 
-        Empty cells contain NaN and have n_profiles = 0.
+        `n_profiles` counts the profiles in a cell; `n_obs` counts, level
+        by level, the non-NaN values that actually entered the mean, so
+        n_obs <= n_profiles, with equality where every profile in the
+        cell has a value at that level. Empty cells contain NaN and have
+        n_profiles = n_obs = 0.
 
     Notes
     -----
@@ -762,9 +771,13 @@ def bin_profiles(
 
             if time_range is None:
                 # Anchor the first bin at the earliest profile and add
-                # bins until the latest profile is covered.
+                # bins until the latest profile is covered. A latest
+                # profile sitting exactly on a bin edge opens a new bin
+                # (bins are half-open), matching the calendar case; the
+                # tiny tolerance keeps float division from undershooting
+                # an exact multiple.
                 span_s = (t_max - t_min).total_seconds()
-                n_extra = max(0, math.ceil((span_s - bin_s) / step_s))
+                n_extra = max(0, math.floor((span_s - bin_s) / step_s + 1e-9) + 1)
                 t_max = t_min + time_bin_delta + n_extra * time_step_delta
 
             centers_s = make_centers(
@@ -803,12 +816,24 @@ def bin_profiles(
                 # latest profile is covered. Stepping (rather than
                 # rolling t_max forward) keeps multi-period bins such as
                 # '3MS' on the lattice defined by the first edge.
-                edges = [time_bin_offset.rollback(t_min)]
+                #
+                # rollback() snaps the date but keeps the time of day, so
+                # drop the clock time first: a calendar bin always starts
+                # at midnight.
+                edges = [time_bin_offset.rollback(t_min.normalize())]
                 while edges[-1] <= t_max:
                     edges.append(edges[-1] + time_bin_offset)
                 edges = pandas.DatetimeIndex(edges)
 
             else:
+                if t_min != t_min.normalize() or t_max != t_max.normalize():
+                    raise ValueError(
+                        f"time bins do not fit the requested range exactly: "
+                        f"with time_bin={time_bin!r}, both ends of time_range "
+                        f"must be at midnight on a calendar boundary "
+                        f"(got {t_min} to {t_max})"
+                    )
+
                 edges = pandas.date_range(t_min, t_max, freq=time_bin_offset)
 
                 if (
@@ -869,6 +894,20 @@ def bin_profiles(
         dtype=int,
     )
 
+    # Per-level count of the values that actually entered each mean: a
+    # profile may be NaN at some levels, so this can be smaller than
+    # `count` at depth. Needed to re-weight bin means exactly later on
+    # (see `climatology`).
+    count_levels = numpy.zeros(
+        (
+            n_time,
+            len(lat_centers),
+            len(lon_centers_unwrapped),
+            len(levels),
+        ),
+        dtype=int,
+    )
+
     # ------------------------------------------------------------------
     # Average profiles in each cell
     # ------------------------------------------------------------------
@@ -911,6 +950,11 @@ def bin_profiles(
                 count[k, j, i] = numpy.count_nonzero(in_cell)
 
                 if count[k, j, i]:
+                    count_levels[k, j, i] = numpy.count_nonzero(
+                        ~numpy.isnan(data[in_cell]),
+                        axis=0,
+                    )
+
                     with warnings.catch_warnings():
                         # Some vertical levels may be NaN for every profile
                         # in an otherwise populated cell.
@@ -958,6 +1002,10 @@ def bin_profiles(
                     ('latitude', 'longitude'),
                     count[0],
                 ),
+                'n_obs': (
+                    ('latitude', 'longitude', 'level'),
+                    count_levels[0],
+                ),
             },
             coords={
                 'latitude': lat_centers,
@@ -995,6 +1043,10 @@ def bin_profiles(
                 ('time', 'latitude', 'longitude'),
                 count,
             ),
+            'n_obs': (
+                ('time', 'latitude', 'longitude', 'level'),
+                count_levels,
+            ),
             'time_bnds': (
                 ('time', 'bnds'),
                 numpy.stack([time_low, time_high], axis=1),
@@ -1008,6 +1060,169 @@ def bin_profiles(
         },
         attrs=attrs,
     )
+
+def climatology(ds, by='month', weighted=True, varname=None):
+    """
+    Collapse the time axis of a `bin_profiles` result into a climatology:
+    all the Januaries averaged together, all the Februaries, and so on.
+
+    Parameters
+    ----------
+    ds : xarray.Dataset
+        Output of `bin_profiles(..., time_bin=...)` with non-overlapping
+        time bins.
+
+    by : str, optional
+        Calendar grouping:
+          'month'     -> 12 groups, coordinate `month` = 1..12
+          'season'    -> 4 groups, coordinate `season` = DJF, MAM, JJA, SON
+          'dayofyear' -> 366 groups, coordinate `dayofyear` = 1..366
+          'week'      -> ISO weeks, coordinate `week` = 1..53
+        Every time bin in `ds` must lie entirely within one group, so the
+        bins have to be at least as fine as the grouping and aligned with
+        it: 'MS' bins into 'month' or 'season', 'QS-DEC' bins into
+        'season', 'D' bins into anything. '30D' bins into 'month', or
+        'MS' bins into 'week', straddle group boundaries and are rejected.
+        Groups with no data are kept, filled with NaN, so the output has
+        the same shape whatever the sampling. Default 'month'.
+
+        Beware that 'dayofyear' and 'week' are calendar counts, not
+        anniversaries: after Feb 29 of a leap year every date is one day
+        of year later than in other years, and ISO week numbers drift
+        against dates by a day each year.
+
+    weighted : bool, optional
+        True (default): weight each bin mean by `n_obs`, the number of
+        values that went into it, level by level. This exactly reproduces
+        the mean you would get by pooling all the profiles of each group
+        into one bin.
+        False: unweighted mean of the bin means, so every bin (every year,
+        for monthly bins) counts equally. This is the conventional
+        "climatological normal" definition and resists domination by
+        heavily sampled years.
+
+    varname : str, optional
+        The data variable to average. Default: the single variable in `ds`
+        that is not `n_profiles`, `n_obs` or `time_bnds`.
+
+    Returns
+    -------
+    xarray.Dataset
+        `<varname>` with dimensions (<by>, latitude, longitude, level).
+        `n_profiles` with dimensions (<by>, latitude, longitude) and
+        `n_obs` with dimensions (<by>, latitude, longitude, level): totals
+        over the time bins in each group.
+        `n_bins` with dimensions (<by>, latitude, longitude): how many
+        time bins with at least one profile contributed to each group.
+
+    Notes
+    -----
+    This is a bin climatology, not a fitted seasonal cycle. To remove a
+    seasonal cycle from a time series see `remove_seasonal_and_trend`.
+    """
+
+    groups = {
+        'month': numpy.arange(1, 13),
+        'season': numpy.array(['DJF', 'MAM', 'JJA', 'SON']),
+        'dayofyear': numpy.arange(1, 367),
+        'week': numpy.arange(1, 54),
+    }
+
+    if by not in groups:
+        raise ValueError(
+            f"by={by!r} not supported; choose from {sorted(groups)}"
+        )
+
+    for required in ('time', 'time_bnds', 'n_profiles', 'n_obs'):
+        if required not in ds:
+            raise ValueError(
+                f"ds has no '{required}'; climatology needs the output of "
+                "bin_profiles(..., time_bin=...)"
+            )
+
+    if ds.attrs.get('time_step') != ds.attrs.get('time_bin'):
+        raise ValueError(
+            f"time bins overlap (time_bin={ds.attrs.get('time_bin')!r}, "
+            f"time_step={ds.attrs.get('time_step')!r}); a profile would be "
+            "counted in more than one bin. Bin without time_step first."
+        )
+
+    bookkeeping = {'n_profiles', 'n_obs', 'time_bnds'}
+
+    if varname is None:
+        candidates = [v for v in ds.data_vars if v not in bookkeeping]
+        if len(candidates) != 1:
+            raise ValueError(
+                f"could not infer varname from data variables {candidates}; "
+                "pass varname explicitly"
+            )
+        varname = candidates[0]
+    elif varname not in ds:
+        raise ValueError(f"ds has no variable '{varname}'")
+
+    def labels(times):
+        # Group label for each instant in `times` (a DataArray of datetimes).
+        if by == 'week':
+            # xarray's dt.week is deprecated in favour of isocalendar().
+            return times.dt.isocalendar().week.astype(int)
+        return getattr(times.dt, by)
+
+    # Every bin must sit inside one group: the label at its first instant
+    # must match the label at its last instant (one nanosecond before the
+    # high edge, since bins are half-open).
+    low = ds['time_bnds'].isel(bnds=0)
+    high = ds['time_bnds'].isel(bnds=1)
+    label_low = labels(low)
+    label_high = labels(high - numpy.timedelta64(1, 'ns'))
+
+    straddles = numpy.flatnonzero((label_low != label_high).values)
+    if len(straddles):
+        k = straddles[0]
+        raise ValueError(
+            f"time bins are not aligned with by={by!r}: bin {k} runs from "
+            f"{pandas.Timestamp(low.values[k])} to "
+            f"{pandas.Timestamp(high.values[k])}, which straddles "
+            f"{by} {label_low.values[k]} and {label_high.values[k]}. "
+            f"Bin with a time_bin that nests inside the {by} grouping "
+            f"(for example 'MS' for 'month', 'D' for anything)."
+        )
+
+    key = label_low.rename(by)
+    var = ds[varname]
+    n_obs = ds['n_obs']
+
+    if weighted:
+        # NaN means "nothing here" and must not poison the weighted sum.
+        numerator = (var.fillna(0) * n_obs).groupby(key).sum('time')
+        denominator = n_obs.groupby(key).sum('time')
+        mean = numerator / denominator.where(denominator > 0)
+    else:
+        mean = var.groupby(key).mean('time')
+
+    # Ask for every possible group so the result has a fixed shape, with
+    # NaN (or 0 for the counts) where nothing was sampled.
+    full = {by: groups[by]}
+
+    out = xarray.Dataset(
+        {
+            varname: mean.reindex(full).transpose(by, ...),
+            'n_profiles': ds['n_profiles'].groupby(key).sum('time').reindex(full, fill_value=0).transpose(by, ...),
+            'n_obs': n_obs.groupby(key).sum('time').reindex(full, fill_value=0).transpose(by, ...),
+            'n_bins': (ds['n_profiles'] > 0).groupby(key).sum('time').reindex(full, fill_value=0).transpose(by, ...),
+        },
+        attrs={
+            **ds.attrs,
+            'method': (
+                f'bin climatology by {by} of a bin-mean time series; '
+                + ('bin means weighted by n_obs' if weighted else 'unweighted mean of bin means')
+                + ' — not a mapped product'
+            ),
+            'climatology_by': by,
+            'climatology_weighted': int(bool(weighted)),
+        },
+    )
+
+    return out
 
 def remove_seasonal_and_trend(da, time_dim='timestamp', seasonal='climatology',
                               n_harmonics=2, trend=None, fit_period=None,
