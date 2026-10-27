@@ -1,6 +1,6 @@
 from argovisHelpers import helpers
 from argovisHelpers import analysis
-import datetime, pytest, numpy, scipy, xarray, gsw
+import datetime, pytest, numpy, scipy, xarray, gsw, warnings, pandas
 
 @pytest.fixture
 def apiroot():
@@ -448,3 +448,1028 @@ def test_regional_mean_multiple_variables():
 
     assert numpy.isclose(out["temp"].item(), expected_temp)
     assert numpy.isclose(out["salt"].item(), expected_salt)
+
+# ---------------------------------------------------------------------------
+# analysis.bin_profiles
+# ---------------------------------------------------------------------------
+
+def _make_profile(pid, lon, lat, values, varname='temperature', nlevels=None, timestamp=None):
+    '''
+    Build a minimal helpers.Profile at (lon, lat) carrying <values> under <varname>.
+    <values> may be None to produce a profile that lacks <varname> entirely
+    (it will carry only 'pressure'), in which case <nlevels> sets the pressure length.
+    <timestamp>, if given, is an ISO string attached as the profile's timestamp.
+    '''
+    if values is None:
+        n = nlevels
+        data = [list(range(n))]
+        names = ['pressure']
+    else:
+        n = len(values)
+        data = [list(values), list(range(n))]
+        names = [varname, 'pressure']
+    doc = {
+        '_id': pid,
+        'geolocation': {'type': 'Point', 'coordinates': [lon, lat]},
+        'data': data,
+        'data_info': [names, [], []],
+    }
+    if timestamp is not None:
+        doc['timestamp'] = timestamp
+    return helpers.Profile(doc, meta={})
+
+
+def test_bin_profiles_nonsquare_tiling():
+    # 2 lat bins of 10 degrees by 2 lon bins of 15 degrees, tiling (0,20) x (100,130)
+    levels = [0, 10, 20]
+    profiles = [
+        _make_profile('sw', 102, 2, [1, 2, 3]),        # lat bin 0, lon bin 0
+        _make_profile('ne_a', 125, 15, [10, 20, 30]),  # lat bin 1, lon bin 1
+        _make_profile('ne_b', 128, 19, [20, 40, 60]),  # lat bin 1, lon bin 1
+        _make_profile('nw', 110, 12, [5, 5, 5]),       # lat bin 1, lon bin 0
+        # lat bin 0, lon bin 1 is deliberately left empty
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=10, lon_bin=15, lat_range=(0, 20), lon_range=(100, 130))
+
+    assert isinstance(ds, xarray.Dataset), 'should return an xarray Dataset'
+    assert ds['temperature'].dims == ('latitude', 'longitude', 'level'), 'variable dims should be (latitude, longitude, level)'
+    assert ds['n_profiles'].dims == ('latitude', 'longitude'), 'n_profiles dims should be (latitude, longitude)'
+    assert ds['temperature'].shape == (2, 2, 3), 'non-square bins should give a 2x2 grid over 3 levels'
+    assert numpy.allclose(ds['latitude'].data, [5, 15]), 'latitude bin centers'
+    assert numpy.allclose(ds['longitude'].data, [107.5, 122.5]), 'longitude bin centers'
+    assert numpy.allclose(ds['level'].data, levels), 'levels should pass through as a coordinate'
+
+    assert numpy.allclose(ds['temperature'].sel(latitude=5, longitude=107.5).data, [1, 2, 3]), 'single-profile cell should equal that profile'
+    assert numpy.allclose(ds['temperature'].sel(latitude=15, longitude=122.5).data, [15, 30, 45]), 'two-profile cell should be the levelwise mean'
+    assert numpy.allclose(ds['temperature'].sel(latitude=15, longitude=107.5).data, [5, 5, 5]), 'single-profile cell should equal that profile'
+    assert numpy.all(numpy.isnan(ds['temperature'].sel(latitude=5, longitude=122.5).data)), 'empty cell should be NaN at every level'
+
+    assert numpy.array_equal(ds['n_profiles'].data, [[1, 0], [1, 2]]), 'profile counts per cell'
+    assert ds['n_profiles'].data.sum() == len(profiles), 'with non-overlapping bins every in-range profile is counted exactly once'
+
+
+def test_bin_profiles_section():
+    # docstring example: one 10-degree latitude bin spanning (-5, 5) gives an equatorial longitude-depth section
+    levels = [0, 100]
+    profiles = [
+        _make_profile('a', 0.5, -4.9, [1, 1]),
+        _make_profile('b', 0.7, 4.9, [3, 3]),
+        _make_profile('c', 1.5, 0.0, [7, 7]),
+        _make_profile('d', 2.5, 6.0, [100, 100]),   # north of the section, ignored
+        _make_profile('e', 2.5, -5.5, [100, 100]),  # south of the section, ignored
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=10, lon_bin=1, lat_range=(-5, 5), lon_range=(0, 3))
+
+    assert ds.sizes['latitude'] == 1, 'a section has exactly one latitude bin'
+    assert numpy.isclose(ds['latitude'].item(), 0), 'section latitude center'
+    assert numpy.allclose(ds['longitude'].data, [0.5, 1.5, 2.5]), 'three 1-degree longitude bins'
+    assert numpy.array_equal(ds['n_profiles'].data, [[2, 1, 0]]), 'out-of-range latitudes should be excluded'
+    assert numpy.allclose(ds['temperature'].isel(latitude=0, longitude=0).data, [2, 2]), 'mean across the section bin'
+    assert numpy.allclose(ds['temperature'].isel(latitude=0, longitude=1).data, [7, 7])
+    assert numpy.all(numpy.isnan(ds['temperature'].isel(latitude=0, longitude=2).data))
+
+    # docstring example verbatim: lon_range=None with lon_bin=1 gives 360 longitude bins
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=10, lon_bin=1, lat_range=(-5, 5), lon_range=None)
+    assert ds['temperature'].shape == (1, 360, 2), 'section over the full globe'
+    assert numpy.allclose(ds['longitude'].data, numpy.arange(0.5, 360, 1)), 'global 1-degree longitude centers'
+
+    # a meridional section works the same way with the roles reversed
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=5, lon_bin=3, lat_range=(-10, 10), lon_range=(0, 3))
+    assert ds['temperature'].shape == (4, 1, 2), 'meridional section: 4 lat bins, 1 lon bin'
+    assert numpy.isclose(ds['longitude'].item(), 1.5)
+    assert numpy.array_equal(ds['n_profiles'].data[:, 0], [1, 1, 2, 1]), 'profiles at -5.5 / -4.9 / 0.0,4.9 / 6.0'
+
+
+def test_bin_profiles_overlapping():
+    # docstring example: lon_bin=0.5, lon_step=0.25 gives 0.5-degree bins every 0.25 degrees
+    levels = [0]
+    profiles = [
+        _make_profile('a', 0.4, 0.5, [1]),   # in [0,0.5) and [0.25,0.75), not [0.5,1)
+        _make_profile('b', 0.9, 0.5, [3]),   # only in [0.5,1)
+        _make_profile('c', 0.1, 0.5, [5]),   # only in [0,0.5)
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=0.5, lon_step=0.25, lat_range=(0, 1), lon_range=(0, 1))
+
+    assert numpy.allclose(ds['longitude'].data, [0.25, 0.5, 0.75]), 'overlapping bins: centers every lon_step'
+    assert numpy.array_equal(ds['n_profiles'].data, [[2, 1, 1]]), 'a profile in the overlap region is counted in both bins'
+    assert ds['n_profiles'].data.sum() > len(profiles), 'overlapping bins count some profiles more than once'
+    assert numpy.allclose(ds['temperature'].data[0, :, 0], [3, 1, 3]), 'means per overlapping bin'
+    assert ds.attrs['lon_step'] == 0.25 and ds.attrs['lon_bin'] == 0.5, 'bin and step recorded in attrs'
+    assert ds.attrs['lat_step'] == 1, 'unspecified step defaults to bin width'
+
+    # overlap in latitude as well
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=1, lat_step=0.5, lon_bin=1, lat_range=(0, 2), lon_range=(0, 1))
+    assert numpy.allclose(ds['latitude'].data, [0.5, 1.0, 1.5]), 'overlapping latitude bins'
+    assert numpy.array_equal(ds['n_profiles'].data[:, 0], [3, 3, 0]), 'lat 0.5 is in [0,1) and [0.5,1.5) but not [1,2]'
+
+    # step equal to bin is just the default tiling
+    ds_default = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=0.5, lat_range=(0, 1), lon_range=(0, 1))
+    ds_explicit = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=0.5, lon_step=0.5, lat_range=(0, 1), lon_range=(0, 1))
+    assert ds_default.identical(ds_explicit), 'lon_step=lon_bin should match the default'
+
+
+def test_bin_profiles_default_domain():
+    # lat_range / lon_range None -> -90..90 and 0..360
+    levels = [0]
+    profiles = [
+        _make_profile('neg_lon', -90, 45, [1]),  # -90 -> 270
+        _make_profile('pos_lon', 90, -45, [2]),
+        _make_profile('north_pole', 10, 90, [3]),   # exactly +90 must not be lost
+        _make_profile('south_pole', 10, -90, [4]),  # exactly -90 is the first bin's low edge
+        _make_profile('lon360', 360, 10, [5]),      # 360 is represented as 0
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=90, lon_bin=180)
+
+    assert numpy.allclose(ds['latitude'].data, [-45, 45]), 'default latitude domain is -90..90'
+    assert numpy.allclose(ds['longitude'].data, [90, 270]), 'default longitude domain is 0..360'
+    assert ds.attrs['lat_range'] == (-90, 90) and ds.attrs['lon_range'] == (0, 360), 'resolved ranges recorded in attrs'
+    assert ds['n_profiles'].data.sum() == len(profiles), 'every profile on the globe lands in some cell'
+    assert ds['n_profiles'].sel(latitude=45, longitude=270).item() == 1, 'negative longitude wrapped to 0..360'
+    assert ds['n_profiles'].sel(latitude=45, longitude=90).item() == 2, 'north pole profile and lon=360 profile'
+    assert numpy.isclose(ds['temperature'].sel(latitude=45, longitude=90).item(), 4), 'mean of lat=90 (3) and lon=360 (5) profiles'
+    assert ds['n_profiles'].sel(latitude=-45, longitude=90).item() == 2, 'south pole profile and lat=-45 profile'
+
+    # explicit full-globe ranges are accepted in either convention
+    ds_0360 = analysis.bin_profiles(profiles, levels, lat_bin=90, lon_bin=180, lon_range=(0, 360))
+    assert ds_0360.identical(ds), 'lon_range=(0,360) is the same as the default'
+    ds_pm180 = analysis.bin_profiles(profiles, levels, lat_bin=90, lon_bin=180, lon_range=(-180, 180))
+    assert ds_pm180['n_profiles'].data.sum() == len(profiles), '(-180,180) covers the globe'
+    assert set(numpy.round(ds_pm180['longitude'].data, 6)) == {90.0, 270.0}, '(-180,180) centers presented in 0..360'
+    assert ds_pm180['n_profiles'].sel(longitude=270).sum().item() == 1 and ds_pm180['n_profiles'].sel(longitude=90).sum().item() == 4
+
+    # the whole globe can be a single bin
+    ds_one = analysis.bin_profiles(profiles, levels, lat_bin=180, lon_bin=360)
+    assert ds_one['temperature'].shape == (1, 1, 1)
+    assert ds_one['n_profiles'].item() == len(profiles)
+    assert numpy.isclose(ds_one['temperature'].item(), 3), 'global mean of 1..5'
+
+
+def test_bin_profiles_dateline():
+    # docstring: lon_range=(350, 20) is allowed; internally 350..380
+    levels = [0]
+    profiles = [
+        _make_profile('a', 355, 0, [1]),
+        _make_profile('b', -5, 0, [3]),     # also 355
+        _make_profile('c', 5, 0, [5]),      # 365 unwrapped
+        _make_profile('d', 15, 0, [7]),     # 375 unwrapped
+        _make_profile('e', 25, 0, [100]),   # outside
+        _make_profile('f', 349.9, 0, [100]),# outside
+        _make_profile('g', 350, 0, [9]),    # exactly on the low edge, included
+        _make_profile('h', 20, 0, [100]),   # exactly on the high edge, excluded (half-open)
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=2, lon_bin=10, lat_range=(-1, 1), lon_range=(350, 20))
+
+    assert numpy.allclose(ds['longitude'].data, [355, 5, 15]), 'centers presented in 0..360 even across the seam'
+    assert ds.attrs['lon_range'] == (350, 380), 'attrs record the unwrapped internal range'
+    assert numpy.array_equal(ds['n_profiles'].data, [[3, 1, 1]]), 'a, b, g in the first bin; c; d'
+    assert numpy.allclose(ds['temperature'].data[0, :, 0], [13 / 3, 5, 7])
+
+    # the same region expressed with a negative start
+    ds2 = analysis.bin_profiles(profiles, levels, lat_bin=2, lon_bin=10, lat_range=(-1, 1), lon_range=(-10, 20))
+    assert ds2.identical(ds), '(-10, 20) is the same region as (350, 20)'
+
+    # overlapping bins across the dateline
+    ds3 = analysis.bin_profiles(profiles, levels, lat_bin=2, lon_bin=10, lon_step=5, lat_range=(-1, 1), lon_range=(350, 20))
+    assert numpy.allclose(ds3['longitude'].data, [355, 0, 5, 10, 15])
+    # unwrapped bins: [350,360) a,b,g; [355,365) a,b; [360,370) c; [365,375) c; [370,380) d
+    assert numpy.array_equal(ds3['n_profiles'].data, [[3, 2, 1, 1, 1]]), 'overlapping bins straddling the seam'
+
+
+def test_bin_profiles_edges_half_open():
+    # bins are [low, high) except the final latitude bin, which also includes its upper edge
+    levels = [0]
+    profiles = [
+        _make_profile('lat_edge', 0.5, 10, [1]),   # interior lat edge -> upper bin
+        _make_profile('lon_edge', 10, 0.5, [1]),   # interior lon edge -> upper bin
+        _make_profile('lat_max', 0.5, 20, [1]),    # top of range -> included in last lat bin
+        _make_profile('lon_max', 20, 0.5, [1]),    # end of lon range -> excluded
+        _make_profile('origin', 0, 0, [1]),        # low corner -> included
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=10, lon_bin=10, lat_range=(0, 20), lon_range=(0, 20))
+
+    assert ds['n_profiles'].sel(latitude=5, longitude=5).item() == 1, 'origin'
+    assert ds['n_profiles'].sel(latitude=15, longitude=5).item() == 2, 'lat_edge and lat_max'
+    assert ds['n_profiles'].sel(latitude=5, longitude=15).item() == 1, 'lon_edge'
+    assert ds['n_profiles'].sel(latitude=15, longitude=15).item() == 0
+    assert ds['n_profiles'].data.sum() == 4, 'lon_max is excluded because longitude stays half-open'
+
+    # lat_max is only kept because it is the last bin: with a taller range it moves up a bin
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=10, lon_bin=10, lat_range=(0, 30), lon_range=(0, 20))
+    assert ds['n_profiles'].sel(latitude=25, longitude=5).item() == 1, 'lat=20 is now an interior edge -> upper bin'
+    assert ds['n_profiles'].sel(latitude=15, longitude=5).item() == 1
+
+
+def test_bin_profiles_missing_data():
+    levels = [0, 10, 20]
+    profiles = [
+        _make_profile('good', 5, 5, [1, 2, 3]),
+        _make_profile('partial', 5, 5, [3, numpy.nan, numpy.nan]),
+        _make_profile('all_nan', 5, 5, [numpy.nan, numpy.nan, numpy.nan]),
+        _make_profile('novar', 5, 5, None, nlevels=3),  # lacks 'temperature' entirely
+        _make_profile('deep_nan_only', 15, 5, [numpy.nan, numpy.nan, 8]),
+    ]
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', RuntimeWarning)
+        ds = analysis.bin_profiles(profiles, levels, lat_bin=10, lon_bin=10, lat_range=(0, 10), lon_range=(0, 20))
+
+    assert ds['n_profiles'].sel(longitude=5).item() == 2, 'all-NaN and missing-variable profiles are not counted'
+    assert numpy.allclose(ds['temperature'].sel(longitude=5).data, [2, 2, 3]), 'nanmean per level ignores the partial NaNs'
+    assert ds['n_profiles'].sel(longitude=15).item() == 1
+    assert numpy.allclose(ds['temperature'].sel(longitude=15).data, [numpy.nan, numpy.nan, 8], equal_nan=True), 'levels NaN for every profile in a populated cell stay NaN, without warning'
+
+    # a cell that only receives unusable profiles is empty
+    ds = analysis.bin_profiles(profiles[2:4], levels, lat_bin=10, lon_bin=10, lat_range=(0, 10), lon_range=(0, 10))
+    assert ds['n_profiles'].item() == 0
+    assert numpy.all(numpy.isnan(ds['temperature'].data))
+
+    # no profiles at all
+    ds = analysis.bin_profiles([], levels, lat_bin=10, lon_bin=10, lat_range=(0, 20), lon_range=(0, 20))
+    assert ds['temperature'].shape == (2, 2, 3)
+    assert numpy.all(numpy.isnan(ds['temperature'].data)) and numpy.all(ds['n_profiles'].data == 0)
+
+    # wrong number of levels is an error naming the profile
+    bad = [_make_profile('short', 5, 5, [1, 2])]
+    with pytest.raises(ValueError, match='short'):
+        analysis.bin_profiles(bad, levels, lat_bin=10, lon_bin=10, lat_range=(0, 10), lon_range=(0, 10))
+
+
+def test_bin_profiles_varname():
+    levels = [0, 1]
+    profiles = [
+        _make_profile('s1', 5, 5, [34, 35], varname='salinity'),
+        _make_profile('s2', 5, 5, [36, 37], varname='salinity'),
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=10, lon_bin=10, lat_range=(0, 10), lon_range=(0, 10), varname='salinity')
+    assert 'salinity' in ds and 'temperature' not in ds, 'output variable is named after varname'
+    assert numpy.allclose(ds['salinity'].data[0, 0], [35, 36])
+    assert ds['n_profiles'].item() == 2
+
+    # asking for a variable none of the profiles carry yields an empty grid, not an error
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=10, lon_bin=10, lat_range=(0, 10), lon_range=(0, 10), varname='temperature')
+    assert ds['n_profiles'].item() == 0 and numpy.all(numpy.isnan(ds['temperature'].data))
+
+
+def test_bin_profiles_fit_and_float():
+    # bins must fit the range exactly; fitting is judged with a tolerance so 0.1-degree bins work
+    levels = [0]
+    ds = analysis.bin_profiles([], levels, lat_bin=0.1, lon_bin=0.1, lat_range=(0, 1), lon_range=(0, 1))
+    assert ds['temperature'].shape == (10, 10, 1), 'ten 0.1-degree bins across a 1-degree range'
+    assert numpy.allclose(ds['latitude'].data, numpy.arange(0.05, 1, 0.1))
+
+    ds = analysis.bin_profiles([], levels, lat_bin=1, lon_bin=1)
+    assert ds['temperature'].shape == (180, 360, 1), 'global 1-degree grid'
+
+    # not an integer number of bins
+    with pytest.raises(ValueError, match='do not fit'):
+        analysis.bin_profiles([], levels, lat_bin=7, lon_bin=10, lat_range=(0, 20), lon_range=(0, 20))
+    with pytest.raises(ValueError, match='do not fit'):
+        analysis.bin_profiles([], levels, lat_bin=10, lon_bin=7, lat_range=(0, 20), lon_range=(0, 20))
+    # overlapping bins whose step doesn't land the last bin on the range maximum
+    with pytest.raises(ValueError, match='do not fit'):
+        analysis.bin_profiles([], levels, lat_bin=1, lon_bin=0.5, lon_step=0.3, lat_range=(0, 1), lon_range=(0, 1))
+    # bin wider than the range
+    with pytest.raises(ValueError, match='wider than'):
+        analysis.bin_profiles([], levels, lat_bin=30, lon_bin=10, lat_range=(0, 20), lon_range=(0, 20))
+    with pytest.raises(ValueError, match='wider than'):
+        analysis.bin_profiles([], levels, lat_bin=10, lon_bin=30, lat_range=(0, 20), lon_range=(0, 20))
+
+    # the output coordinates always have the first low edge on the range min and last high edge on the range max
+    ds = analysis.bin_profiles([], levels, lat_bin=3, lat_step=1, lon_bin=4, lon_step=2, lat_range=(-6, 6), lon_range=(100, 120))
+    assert numpy.isclose(ds['latitude'].data[0] - 1.5, -6) and numpy.isclose(ds['latitude'].data[-1] + 1.5, 6)
+    assert numpy.isclose(ds['longitude'].data[0] - 2, 100) and numpy.isclose(ds['longitude'].data[-1] + 2, 120)
+    assert numpy.allclose(numpy.diff(ds['latitude'].data), 1) and numpy.allclose(numpy.diff(ds['longitude'].data), 2), 'centers spaced by step'
+
+
+def test_bin_profiles_validation():
+    levels = [0]
+    ok = dict(lat_bin=10, lon_bin=10, lat_range=(0, 20), lon_range=(0, 20))
+
+    def call(**overrides):
+        return analysis.bin_profiles([], levels, **{**ok, **overrides})
+
+    # bin widths
+    with pytest.raises(ValueError, match='lat_bin must be positive'):
+        call(lat_bin=0)
+    with pytest.raises(ValueError, match='lon_bin must be positive'):
+        call(lon_bin=-1)
+    with pytest.raises(ValueError, match='lat_bin cannot exceed 180'):
+        call(lat_bin=181)
+    with pytest.raises(ValueError, match='lon_bin cannot exceed 360'):
+        call(lon_bin=361)
+
+    # steps
+    with pytest.raises(ValueError, match='lat_step must be positive'):
+        call(lat_step=0)
+    with pytest.raises(ValueError, match='lon_step must be positive'):
+        call(lon_step=-0.5)
+    with pytest.raises(ValueError, match='lat_step cannot exceed lat_bin'):
+        call(lat_step=11)
+    with pytest.raises(ValueError, match='lon_step cannot exceed lon_bin'):
+        call(lon_step=11)
+
+    # latitude range
+    with pytest.raises(ValueError, match='lat_range must be'):
+        call(lat_range=(0, 10, 20))
+    with pytest.raises(ValueError, match='-90 <= min < max <= 90'):
+        call(lat_range=(20, 0))
+    with pytest.raises(ValueError, match='-90 <= min < max <= 90'):
+        call(lat_range=(10, 10))
+    with pytest.raises(ValueError, match='-90 <= min < max <= 90'):
+        call(lat_range=(-100, 0), lat_bin=100)
+    with pytest.raises(ValueError, match='-90 <= min < max <= 90'):
+        call(lat_range=(0, 91), lat_bin=91)
+
+    # longitude range
+    with pytest.raises(ValueError, match='lon_range must be'):
+        call(lon_range=(0,))
+    with pytest.raises(ValueError, match='zero width'):
+        call(lon_range=(10, 10))
+    with pytest.raises(ValueError, match='more than 360'):
+        call(lon_range=(0, 400), lon_bin=10)
+    with pytest.raises(ValueError, match='more than 360'):
+        call(lon_range=(400, 0), lon_bin=10)
+    # a reversed partial range isn't an error: it's the complementary dateline-crossing range
+    ds = call(lon_range=(20, 0), lon_bin=10)
+    assert ds.sizes['longitude'] == 34, '(20, 0) spans 340 degrees the long way round'
+    assert numpy.isclose(ds['longitude'].data[0], 25) and numpy.isclose(ds['longitude'].data[-1], 355)
+
+
+def test_bin_profiles_time_fixed_width():
+    # two 30-day bins over an explicit 60-day range; one 1x1 spatial cell
+    levels = [0, 10]
+    profiles = [
+        _make_profile('a', 0.5, 0.5, [1, 1], timestamp='2020-01-01T00:00:00Z'),   # bin 0, on the range minimum
+        _make_profile('b', 0.5, 0.5, [3, 3], timestamp='2020-01-20T12:00:00Z'),   # bin 0
+        _make_profile('c', 0.5, 0.5, [10, 10], timestamp='2020-01-31T00:00:00Z'), # bin 1, exactly on the interior edge -> upper bin
+        _make_profile('d', 0.5, 0.5, [20, 20], timestamp='2020-03-01T00:00:00Z'), # bin 1, exactly on the range maximum (closed on top)
+        _make_profile('e', 0.5, 0.5, [99, 99], timestamp='2019-12-31T23:59:59Z'), # before the range, ignored
+        _make_profile('f', 0.5, 0.5, [99, 99], timestamp='2020-03-01T00:00:01Z'), # after the range, ignored
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1),
+                               time_bin='30D', time_range=('2020-01-01', '2020-03-01'))
+
+    assert ds['temperature'].dims == ('time', 'latitude', 'longitude', 'level'), 'time should be the leading dimension'
+    assert ds['n_profiles'].dims == ('time', 'latitude', 'longitude')
+    assert ds['time_bnds'].dims == ('time', 'bnds')
+    assert ds.sizes['time'] == 2, '60 days / 30-day bins = 2 bins'
+    assert ds['time'].dtype.kind == 'M', 'time coordinate should be datetime64'
+    assert numpy.array_equal(ds['time'].data, numpy.array(['2020-01-16', '2020-02-15'], dtype='datetime64[ns]')), 'time coordinate is the bin center'
+    assert numpy.array_equal(ds['time_bnds'].data[:, 0], numpy.array(['2020-01-01', '2020-01-31'], dtype='datetime64[ns]')), 'low edges'
+    assert numpy.array_equal(ds['time_bnds'].data[:, 1], numpy.array(['2020-01-31', '2020-03-01'], dtype='datetime64[ns]')), 'high edges'
+
+    assert numpy.array_equal(ds['n_profiles'].data[:, 0, 0], [2, 2]), 'profile counts per time bin'
+    assert numpy.allclose(ds['temperature'].data[0, 0, 0], [2, 2]), 'first bin is the mean of a and b'
+    assert numpy.allclose(ds['temperature'].data[1, 0, 0], [15, 15]), 'second bin is the mean of c and d'
+
+    assert ds.attrs['time_bin'] == '30 days 00:00:00' and ds.attrs['time_step'] == '30 days 00:00:00'
+    assert ds.attrs['time_range_start'] == '2020-01-01 00:00:00' and ds.attrs['time_range_end'] == '2020-03-01 00:00:00'
+
+    # pandas.Timedelta and the 'D' alias are accepted too, and give the same answer
+    ds2 = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1),
+                                time_bin=pandas.Timedelta(days=30), time_range=('2020-01-01', '2020-03-01'))
+    assert ds2.identical(ds)
+
+    # default time_range: first bin anchored at the earliest profile, bins added until the latest is covered;
+    # d sits exactly 60 days in, i.e. on a bin edge, so it opens a third bin rather than closing the second
+    ds3 = analysis.bin_profiles(profiles[:4], levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1), time_bin='30D')
+    assert ds3.sizes['time'] == 3
+    assert ds3['time_bnds'].data[0, 0] == numpy.datetime64('2020-01-01', 'ns')
+    assert ds3['time_bnds'].data[-1, 0] == numpy.datetime64('2020-03-01', 'ns') and ds3['time_bnds'].data[-1, 1] == numpy.datetime64('2020-03-31', 'ns')
+    assert numpy.array_equal(ds3['n_profiles'].data[:, 0, 0], [2, 1, 1]), 'every profile lands in exactly one non-overlapping bin'
+    # ... whereas a latest profile strictly inside the last bin does not add one
+    ds3b = analysis.bin_profiles(profiles[:3], levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1), time_bin='30D')
+    assert ds3b.sizes['time'] == 2 and numpy.array_equal(ds3b['n_profiles'].data[:, 0, 0], [2, 1])
+
+    # no-time call is unchanged: no time dimension, no time_bnds, no time attrs
+    ds4 = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1))
+    assert 'time' not in ds4.dims and 'time_bnds' not in ds4 and 'time_bin' not in ds4.attrs
+    assert ds4['temperature'].dims == ('latitude', 'longitude', 'level')
+    assert ds4['n_profiles'].data.sum() == 6, 'without time binning every profile counts regardless of timestamp'
+
+
+def test_bin_profiles_time_calendar():
+    # calendar months: unequal widths, snapped to month boundaries when time_range is None
+    levels = [0]
+    profiles = [
+        _make_profile('jan_a', 0.5, 0.5, [1], timestamp='2020-01-15T00:00:00Z'),
+        _make_profile('jan_b', 0.5, 0.5, [3], timestamp='2020-01-31T23:59:59Z'),
+        _make_profile('feb', 0.5, 0.5, [10], timestamp='2020-02-01T00:00:00Z'),   # first instant of Feb belongs to Feb
+        _make_profile('mar', 0.5, 0.5, [20], timestamp='2020-03-20T00:00:00Z'),
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1), time_bin='MS')
+
+    assert ds.sizes['time'] == 3, 'Jan, Feb, Mar 2020'
+    assert numpy.array_equal(ds['time_bnds'].data[:, 0], numpy.array(['2020-01-01', '2020-02-01', '2020-03-01'], dtype='datetime64[ns]'))
+    assert numpy.array_equal(ds['time_bnds'].data[:, 1], numpy.array(['2020-02-01', '2020-03-01', '2020-04-01'], dtype='datetime64[ns]'))
+    widths = (ds['time_bnds'].data[:, 1] - ds['time_bnds'].data[:, 0]) / numpy.timedelta64(1, 'D')
+    assert numpy.array_equal(widths, [31, 29, 31]), 'calendar bins have calendar widths (2020 is a leap year)'
+    assert numpy.array_equal(ds['n_profiles'].data[:, 0, 0], [2, 1, 1])
+    assert numpy.allclose(ds['temperature'].data[:, 0, 0, 0], [2, 10, 20])
+    assert ds.attrs['time_bin'] == 'MS'
+
+    # explicit aligned range, including empty months
+    ds2 = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1),
+                                time_bin='MS', time_range=('2019-12-01', '2020-05-01'))
+    assert ds2.sizes['time'] == 5
+    assert numpy.array_equal(ds2['n_profiles'].data[:, 0, 0], [0, 2, 1, 1, 0])
+    assert numpy.all(numpy.isnan(ds2['temperature'].data[[0, 4], 0, 0, 0])), 'empty months are NaN'
+
+    # seasons and years
+    ds3 = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1),
+                                time_bin='3MS', time_range=('2020-01-01', '2020-07-01'))
+    assert ds3.sizes['time'] == 2 and numpy.array_equal(ds3['n_profiles'].data[:, 0, 0], [4, 0])
+    ds4 = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1), time_bin='YS')
+    assert ds4.sizes['time'] == 1 and ds4['n_profiles'].data.sum() == 4
+    assert ds4['time_bnds'].data[0, 0] == numpy.datetime64('2020-01-01', 'ns') and ds4['time_bnds'].data[0, 1] == numpy.datetime64('2021-01-01', 'ns')
+
+    # default range with multi-period bins stays on the lattice set by the first edge:
+    # Jan 15 .. Mar 20 is one quarter starting Jan 1, not Jan 1 .. Apr 1 chopped into something else
+    ds5 = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1), time_bin='3MS')
+    assert ds5.sizes['time'] == 1 and ds5['n_profiles'].data.sum() == 4
+    assert ds5['time_bnds'].data[0, 1] == numpy.datetime64('2020-04-01', 'ns')
+    ds6 = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1), time_bin='QS-DEC')
+    assert ds6.sizes['time'] == 2, 'DJF and MAM'
+    assert ds6['time_bnds'].data[0, 0] == numpy.datetime64('2019-12-01', 'ns') and ds6['time_bnds'].data[-1, 1] == numpy.datetime64('2020-06-01', 'ns')
+    assert numpy.array_equal(ds6['n_profiles'].data[:, 0, 0], [3, 1])
+    # a latest profile sitting exactly on a boundary opens a new bin rather than being folded into the previous one
+    ds7 = analysis.bin_profiles(profiles + [_make_profile('apr', 0.5, 0.5, [40], timestamp='2020-04-01T00:00:00Z')],
+                                levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1), time_bin='3MS')
+    assert ds7.sizes['time'] == 2 and numpy.array_equal(ds7['n_profiles'].data[:, 0, 0], [4, 1])
+
+    # calendar bins start at midnight regardless of the profiles' clock times
+    odd_hours = [
+        _make_profile('a', 0.5, 0.5, [1], timestamp='2020-01-15T06:30:00Z'),
+        _make_profile('b', 0.5, 0.5, [3], timestamp='2020-02-01T00:00:00Z'),   # first instant of Feb -> Feb, not Jan
+        _make_profile('c', 0.5, 0.5, [5], timestamp='2020-02-29T23:45:00Z'),
+    ]
+    ds8 = analysis.bin_profiles(odd_hours, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1), time_bin='MS')
+    assert numpy.array_equal(ds8['time_bnds'].data[:, 0], numpy.array(['2020-01-01', '2020-02-01'], dtype='datetime64[ns]')), 'edges at midnight, not 06:30'
+    assert numpy.array_equal(ds8['time_bnds'].data[:, 1], numpy.array(['2020-02-01', '2020-03-01'], dtype='datetime64[ns]'))
+    assert numpy.array_equal(ds8['n_profiles'].data[:, 0, 0], [1, 2])
+    ds9 = analysis.bin_profiles(odd_hours, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1), time_bin='W-MON')
+    assert all(pandas.Timestamp(t).weekday() == 0 and pandas.Timestamp(t).time() == datetime.time(0) for t in ds9['time_bnds'].data.ravel()), 'weekly edges are Monday midnights'
+    # ... and an explicit calendar range with a clock time is rejected
+    with pytest.raises(ValueError, match='midnight'):
+        analysis.bin_profiles(odd_hours, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1),
+                              time_bin='MS', time_range=('2020-01-01T06:30', '2020-03-01T06:30'))
+
+    # a range not on the calendar boundary does not fit
+    with pytest.raises(ValueError, match='do not fit'):
+        analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1),
+                              time_bin='MS', time_range=('2020-01-15', '2020-04-01'))
+    # ... nor does a whole-boundary range that isn't a whole number of bins
+    with pytest.raises(ValueError, match='do not fit'):
+        analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1),
+                              time_bin='3MS', time_range=('2020-01-01', '2020-05-01'))
+    with pytest.raises(ValueError, match='do not fit'):
+        analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1),
+                              time_bin='MS', time_range=('2020-01-01', '2020-04-15'))
+    # calendar bins never overlap
+    with pytest.raises(ValueError, match='time_step'):
+        analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1), time_bin='MS', time_step='10D')
+
+
+def test_bin_profiles_time_overlapping():
+    # 20-day bins every 10 days over 40 days: 3 overlapping bins
+    levels = [0]
+    profiles = [
+        _make_profile('a', 0.5, 0.5, [1], timestamp='2020-01-05T00:00:00Z'),   # day 4:  bin 0 only
+        _make_profile('b', 0.5, 0.5, [3], timestamp='2020-01-16T00:00:00Z'),   # day 15: bins 0 and 1
+        _make_profile('c', 0.5, 0.5, [5], timestamp='2020-01-26T00:00:00Z'),   # day 25: bins 1 and 2
+        _make_profile('d', 0.5, 0.5, [7], timestamp='2020-02-10T00:00:00Z'),   # day 40: bin 2 only (closed on top)
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1),
+                               time_bin='20D', time_step='10D', time_range=('2020-01-01', '2020-02-10'))
+    assert ds.sizes['time'] == 3
+    assert numpy.array_equal(ds['time'].data, numpy.array(['2020-01-11', '2020-01-21', '2020-01-31'], dtype='datetime64[ns]')), 'centers spaced by time_step'
+    assert numpy.array_equal(ds['n_profiles'].data[:, 0, 0], [2, 2, 2])
+    assert numpy.allclose(ds['temperature'].data[:, 0, 0, 0], [2, 4, 6])
+    assert ds['n_profiles'].data.sum() == 6 > len(profiles), 'with overlapping bins profiles are counted more than once'
+    assert ds.attrs['time_step'] == '10 days 00:00:00'
+
+    # explicit step equal to bin is the default
+    ds_default = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1),
+                                       time_bin='20D', time_range=('2020-01-01', '2020-02-10'))
+    ds_explicit = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1),
+                                        time_bin='20D', time_step='20D', time_range=('2020-01-01', '2020-02-10'))
+    assert ds_default.identical(ds_explicit)
+
+    # step larger than bin would leave gaps
+    with pytest.raises(ValueError, match='cannot exceed time_bin'):
+        analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1),
+                              time_bin='10D', time_step='20D', time_range=('2020-01-01', '2020-02-10'))
+    # bins that don't fit the range
+    with pytest.raises(ValueError, match='do not fit'):
+        analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1),
+                              time_bin='7D', time_range=('2020-01-01', '2020-02-10'))
+    with pytest.raises(ValueError, match='wider than'):
+        analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1),
+                              time_bin='60D', time_range=('2020-01-01', '2020-02-10'))
+
+
+def test_bin_profiles_time_validation():
+    levels = [0]
+    stamped = [_make_profile('a', 0.5, 0.5, [1], timestamp='2020-01-05T00:00:00Z')]
+    unstamped = [_make_profile('b', 0.5, 0.5, [1])]
+    kw = dict(lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1))
+
+    # time options require time_bin
+    with pytest.raises(ValueError, match='time_step requires time_bin'):
+        analysis.bin_profiles(stamped, levels, time_step='1D', **kw)
+    with pytest.raises(ValueError, match='time_range requires time_bin'):
+        analysis.bin_profiles(stamped, levels, time_range=('2020-01-01', '2020-02-01'), **kw)
+    # every profile needs a timestamp once time binning is on, but not otherwise
+    with pytest.raises(ValueError, match='no timestamp'):
+        analysis.bin_profiles(stamped + unstamped, levels, time_bin='1D', **kw)
+    assert analysis.bin_profiles(stamped + unstamped, levels, **kw)['n_profiles'].data.sum() == 2
+    # nothing to infer a range from
+    with pytest.raises(ValueError, match='time_range must be given'):
+        analysis.bin_profiles([], levels, time_bin='1D', **kw)
+    ds = analysis.bin_profiles([], levels, time_bin='MS', time_range=('2020-01-01', '2020-03-01'), **kw)
+    assert ds.sizes['time'] == 2 and ds['n_profiles'].data.sum() == 0
+    # garbage time_bin
+    with pytest.raises(ValueError, match='neither a duration'):
+        analysis.bin_profiles(stamped, levels, time_bin='fortnightly', **kw)
+    # malformed ranges
+    with pytest.raises(ValueError, match='start < end'):
+        analysis.bin_profiles(stamped, levels, time_bin='1D', time_range=('2020-02-01', '2020-01-01'), **kw)
+    with pytest.raises(ValueError, match='timezone-naive'):
+        analysis.bin_profiles(stamped, levels, time_bin='1D', time_range=('2020-01-01T00:00:00Z', '2020-02-01'), **kw)
+    with pytest.raises(ValueError, match='must be positive'):
+        analysis.bin_profiles(stamped, levels, time_bin='0D', time_range=('2020-01-01', '2020-02-01'), **kw)
+
+    # a single profile with no time_range still yields one bin containing it
+    ds = analysis.bin_profiles(stamped, levels, time_bin='MS', **kw)
+    assert ds.sizes['time'] == 1 and ds['n_profiles'].data.sum() == 1
+    ds = analysis.bin_profiles(stamped, levels, time_bin='10D', **kw)
+    assert ds.sizes['time'] == 1 and ds['n_profiles'].data.sum() == 1
+
+
+def test_bin_profiles_time_and_space_together():
+    # time bins are independent of spatial bins: a 2x1 spatial grid over 2 months
+    levels = [0, 5]
+    profiles = [
+        _make_profile('s_jan', 0.5, 2, [1, 1], timestamp='2020-01-10T00:00:00Z'),   # south, Jan
+        _make_profile('n_jan', 0.5, 7, [2, 2], timestamp='2020-01-20T00:00:00Z'),   # north, Jan
+        _make_profile('n_feb_a', 0.5, 8, [4, 4], timestamp='2020-02-05T00:00:00Z'), # north, Feb
+        _make_profile('n_feb_b', 0.5, 9, [6, 6], timestamp='2020-02-25T00:00:00Z'), # north, Feb
+        # south, Feb is empty
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=5, lon_bin=1, lat_range=(0, 10), lon_range=(0, 1), time_bin='MS')
+    assert ds['temperature'].shape == (2, 2, 1, 2), '(time, latitude, longitude, level)'
+    assert numpy.array_equal(ds['n_profiles'].data[:, :, 0], [[1, 1], [0, 2]])
+    assert numpy.allclose(ds['temperature'].sel(time='2020-01-16T12', latitude=2.5, longitude=0.5).data, [1, 1])
+    assert numpy.allclose(ds['temperature'].sel(time='2020-01-16T12', latitude=7.5, longitude=0.5).data, [2, 2])
+    assert numpy.allclose(ds['temperature'].sel(time='2020-02-15T12', latitude=7.5, longitude=0.5).data, [5, 5])
+    assert numpy.all(numpy.isnan(ds['temperature'].sel(time='2020-02-15T12', latitude=2.5, longitude=0.5).data))
+    # a profile only ever influences its own time bin
+    assert ds['temperature'].isel(time=0).sum() == 3 * 2 and ds['temperature'].isel(time=1).sum() == 5 * 2
+    # the dataset round-trips through netCDF (attrs are all scalars/strings)
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as d:
+        ds.to_netcdf(os.path.join(d, 'x.nc'))
+        back = xarray.open_dataset(os.path.join(d, 'x.nc'))
+        assert back.sizes['time'] == 2 and 'time_bnds' in back
+        back.close()
+
+
+def test_bin_profiles_n_obs():
+    # n_obs counts non-NaN values level by level; n_profiles counts profiles per cell
+    levels = [0, 10, 20]
+    profiles = [
+        _make_profile('a', 0.5, 0.5, [1, 2, numpy.nan]),
+        _make_profile('b', 0.5, 0.5, [3, numpy.nan, numpy.nan]),
+        _make_profile('c', 0.5, 0.5, [5, 6, 7]),
+    ]
+    ds = analysis.bin_profiles(profiles, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 2))
+    assert ds['n_obs'].dims == ('latitude', 'longitude', 'level')
+    assert numpy.array_equal(ds['n_obs'].data[0, 0], [3, 2, 1]), 'per-level counts of values that entered the mean'
+    assert numpy.array_equal(ds['n_obs'].data[0, 1], [0, 0, 0]), 'empty cell'
+    assert ds['n_profiles'].data[0, 0] == 3
+    assert numpy.allclose(ds['temperature'].data[0, 0], [3, 4, 7]), 'nanmean over the available values'
+    assert numpy.all(ds['n_obs'].data <= ds['n_profiles'].data[..., None]), 'n_obs never exceeds n_profiles'
+
+    # with time binning the same, with a leading time dim
+    stamped = [_make_profile(p.id, 0.5, 0.5, [1, numpy.nan, 3], timestamp=f'2020-0{k+1}-10T00:00:00Z') for k, p in enumerate(profiles)]
+    ds = analysis.bin_profiles(stamped, levels, lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1), time_bin='MS')
+    assert ds['n_obs'].dims == ('time', 'latitude', 'longitude', 'level')
+    assert numpy.array_equal(ds['n_obs'].data[:, 0, 0, :], [[1, 0, 1]] * 3)
+
+
+# ---------------------------------------------------------------------------
+# analysis.climatology
+# ---------------------------------------------------------------------------
+
+def _stamped(pid, values, when, lon=0.5, lat=0.5):
+    return _make_profile(pid, lon, lat, values, timestamp=when)
+
+
+def test_climatology_matches_pooling():
+    # Weighted by n_obs, the climatology of monthly bins must equal binning all the
+    # profiles of each calendar month together directly. Uneven sampling across years
+    # and level-wise NaNs are both present so that weighted and unweighted differ.
+    levels = [0, 100]
+    profiles = [
+        _stamped('j19',  [10, 10],         '2019-01-10T00:00:00Z'),
+        _stamped('j20a', [1, numpy.nan],   '2020-01-05T00:00:00Z'),
+        _stamped('j20b', [2, 2],           '2020-01-15T00:00:00Z'),
+        _stamped('j20c', [3, 3],           '2020-01-25T00:00:00Z'),
+        _stamped('f19',  [5, 5],           '2019-02-10T00:00:00Z'),
+        _stamped('f21',  [7, numpy.nan],   '2021-02-20T00:00:00Z'),
+    ]
+    kw = dict(lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1))
+    monthly = analysis.bin_profiles(profiles, levels, time_bin='MS', time_range=('2019-01-01', '2022-01-01'), **kw)
+    clim = analysis.climatology(monthly, by='month')
+
+    assert clim['temperature'].dims == ('month', 'latitude', 'longitude', 'level')
+    assert numpy.array_equal(clim['month'].data, numpy.arange(1, 13)), 'all 12 months present even when unsampled'
+
+    # pooled reference: every January profile in one bin, every February profile in one bin
+    jan = analysis.bin_profiles([p for p in profiles if p.timestamp.month == 1], levels, **kw)
+    feb = analysis.bin_profiles([p for p in profiles if p.timestamp.month == 2], levels, **kw)
+    assert numpy.allclose(clim['temperature'].sel(month=1).data, jan['temperature'].data), 'January climatology == pooled January bin'
+    assert numpy.allclose(clim['temperature'].sel(month=2).data, feb['temperature'].data), 'February climatology == pooled February bin'
+    assert numpy.allclose(clim['temperature'].sel(month=1).data[0, 0], [16 / 4, 15 / 3]), 'level 100 has only 3 values in January'
+    assert numpy.all(numpy.isnan(clim['temperature'].sel(month=slice(3, 12)).data)), 'unsampled months are NaN'
+
+    assert numpy.array_equal(clim['n_obs'].sel(month=1).data[0, 0], [4, 3])
+    assert numpy.array_equal(clim['n_profiles'].data[:, 0, 0], [4, 2] + [0] * 10)
+    assert numpy.array_equal(clim['n_bins'].data[:, 0, 0], [2, 2] + [0] * 10), 'two Januaries and two Februaries contributed'
+    assert clim.attrs['climatology_by'] == 'month' and clim.attrs['climatology_weighted'] == 1
+    assert clim.attrs['time_bin'] == 'MS', 'source attrs carried through'
+
+    # unweighted: every year counts equally -> mean of the two January bin means
+    flat = analysis.climatology(monthly, by='month', weighted=False)
+    assert numpy.isclose(flat['temperature'].sel(month=1).data[0, 0, 0], (10 + 2) / 2)
+    assert numpy.allclose(flat['temperature'].sel(month=1).data, monthly['temperature'].groupby('time.month').mean('time').sel(month=1).data)
+    assert flat.attrs['climatology_weighted'] == 0
+    assert numpy.array_equal(flat['n_obs'].data, clim['n_obs'].data), 'counts are reported the same way either way'
+
+
+def test_climatology_seasons_and_other_groupings():
+    levels = [0]
+    profiles = [
+        _stamped('dec', [1], '2019-12-15T00:00:00Z'), _stamped('jan', [3], '2020-01-15T00:00:00Z'),
+        _stamped('apr', [10], '2020-04-15T00:00:00Z'), _stamped('jul', [20], '2020-07-15T00:00:00Z'),
+        _stamped('oct_a', [30], '2020-10-15T00:00:00Z'), _stamped('oct_b', [50], '2021-10-15T00:00:00Z'),
+    ]
+    kw = dict(lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1))
+    monthly = analysis.bin_profiles(profiles, levels, time_bin='MS', **kw)
+
+    s = analysis.climatology(monthly, by='season')
+    assert list(s['season'].data) == ['DJF', 'MAM', 'JJA', 'SON'], 'seasons in calendar order, not alphabetical'
+    assert numpy.allclose(s['temperature'].data[:, 0, 0, 0], [2, 10, 20, 40])
+    assert numpy.array_equal(s['n_bins'].data[:, 0, 0], [2, 1, 1, 2])
+
+    # seasonal bins straight from bin_profiles give the same seasonal climatology
+    seasonal = analysis.bin_profiles(profiles, levels, time_bin='QS-DEC', **kw)
+    s2 = analysis.climatology(seasonal, by='season')
+    assert numpy.allclose(s2['temperature'].data, s['temperature'].data)
+
+    # daily bins nest inside every grouping
+    daily = analysis.bin_profiles(profiles, levels, time_bin='D', **kw)
+    d = analysis.climatology(daily, by='dayofyear')
+    assert d.sizes['dayofyear'] == 366 and d['n_profiles'].data.sum() == len(profiles)
+    # dayofyear shifts by one after Feb 29 in leap years: Oct 15 is day 289 in 2020 but 288 in 2021
+    assert numpy.isclose(d['temperature'].sel(dayofyear=289).data[0, 0, 0], 30) and numpy.isclose(d['temperature'].sel(dayofyear=288).data[0, 0, 0], 50)
+    w = analysis.climatology(daily, by='week')
+    assert w.sizes['week'] == 53 and w['n_profiles'].data.sum() == len(profiles)
+    assert numpy.allclose(analysis.climatology(daily, by='month')['temperature'].data, analysis.climatology(monthly, by='month')['temperature'].data, equal_nan=True), 'daily bins rolled up to months match monthly bins'
+
+    # the result round-trips through netCDF
+    import tempfile, os
+    with tempfile.TemporaryDirectory() as tmp:
+        s.to_netcdf(os.path.join(tmp, 'clim.nc'))
+        back = xarray.open_dataset(os.path.join(tmp, 'clim.nc'))
+        assert list(back['season'].data) == ['DJF', 'MAM', 'JJA', 'SON']
+        back.close()
+
+
+def test_climatology_rejects_misaligned_bins():
+    levels = [0]
+    kw = dict(lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1))
+    profiles = [_stamped('a', [1], '2020-01-15T00:00:00Z'), _stamped('b', [3], '2020-06-15T00:00:00Z')]
+
+    # fixed 30-day bins straddle month boundaries
+    thirty = analysis.bin_profiles(profiles, levels, time_bin='30D', time_range=('2020-01-01', '2020-06-29'), **kw)
+    with pytest.raises(ValueError, match='straddles month'):
+        analysis.climatology(thirty, by='month')
+    # monthly bins are coarser than weeks or days
+    monthly = analysis.bin_profiles(profiles, levels, time_bin='MS', **kw)
+    with pytest.raises(ValueError, match='straddles week'):
+        analysis.climatology(monthly, by='week')
+    with pytest.raises(ValueError, match='straddles dayofyear'):
+        analysis.climatology(monthly, by='dayofyear')
+    # calendar quarters starting in January straddle the DJF/MAM seasons; QS-DEC does not
+    with pytest.raises(ValueError, match='straddles season'):
+        analysis.climatology(analysis.bin_profiles(profiles, levels, time_bin='QS', **kw), by='season')
+    analysis.climatology(analysis.bin_profiles(profiles, levels, time_bin='QS-DEC', **kw), by='season')
+    # a year is coarser than everything
+    with pytest.raises(ValueError, match='straddles month'):
+        analysis.climatology(analysis.bin_profiles(profiles, levels, time_bin='YS', **kw), by='month')
+    # overlapping bins would count profiles more than once
+    overlapping = analysis.bin_profiles(profiles, levels, time_bin='2D', time_step='1D', time_range=('2020-01-01', '2020-07-01'), **kw)
+    with pytest.raises(ValueError, match='overlap'):
+        analysis.climatology(overlapping, by='month')
+    # fixed-width bins that happen to nest are fine (12h bins never straddle a day, hence never a month)
+    analysis.climatology(analysis.bin_profiles(profiles, levels, time_bin='12h', time_range=('2020-01-01', '2020-07-01'), **kw), by='month')
+    # ... while 2-day bins from Jan 1 eventually straddle a month boundary (Jan 31 - Feb 2)
+    with pytest.raises(ValueError, match='straddles month'):
+        analysis.climatology(analysis.bin_profiles(profiles, levels, time_bin='2D', time_range=('2020-01-01', '2020-07-01'), **kw), by='month')
+
+
+def test_climatology_validation():
+    levels = [0]
+    kw = dict(lat_bin=1, lon_bin=1, lat_range=(0, 1), lon_range=(0, 1))
+    profiles = [_stamped('a', [1], '2020-01-15T00:00:00Z')]
+    monthly = analysis.bin_profiles(profiles, levels, time_bin='MS', **kw)
+    no_time = analysis.bin_profiles(profiles, levels, **kw)
+
+    with pytest.raises(ValueError, match="no 'time'"):
+        analysis.climatology(no_time)
+    with pytest.raises(ValueError, match='not supported'):
+        analysis.climatology(monthly, by='fortnight')
+    with pytest.raises(ValueError, match="no variable 'salinity'"):
+        analysis.climatology(monthly, varname='salinity')
+    # varname inference: ambiguous when two data variables are present, explicit works
+    two = monthly.assign(salinity=monthly['temperature'] * 2)
+    with pytest.raises(ValueError, match='could not infer varname'):
+        analysis.climatology(two)
+    assert numpy.allclose(analysis.climatology(two, varname='salinity')['salinity'].sel(month=1).data, 2)
+
+
+# ---------------------------------------------------------------------------
+# analysis.remove_seasonal_and_trend
+# ---------------------------------------------------------------------------
+
+def _monthly_times(start='2000-01-01', n=120):
+    return pandas.date_range(start, periods=n, freq='MS')
+
+
+def _years(times):
+    # elapsed time in 365.25-day years from the first sample; the helper's harmonics use the same year length
+    return numpy.asarray((times - times[0]) / pandas.Timedelta(days=365.25), dtype=float)
+
+
+def _harmonics(t, amps=((2.0, 1.0), (0.5, -0.25))):
+    # amps[k-1] = (cos amplitude, sin amplitude) of harmonic k
+    out = numpy.zeros_like(t)
+    for k, (a, b) in enumerate(amps, start=1):
+        out += a * numpy.cos(2 * numpy.pi * k * t) + b * numpy.sin(2 * numpy.pi * k * t)
+    return out
+
+
+def _series(values, times, name='x'):
+    return xarray.DataArray(values, dims=['timestamp'], coords={'timestamp': times}, name=name)
+
+
+def test_rsat_climatology_matches_monthly_means():
+    rng = numpy.random.default_rng(0)
+    times = _monthly_times(n=120)
+    da = _series(rng.normal(size=120), times)
+
+    anom = analysis.remove_seasonal_and_trend(da, seasonal='climatology', trend=None)
+    expected = da.groupby('timestamp.month') - da.groupby('timestamp.month').mean()
+    assert numpy.allclose(anom.data, expected.data), 'climatology with no trend is exactly removal of the monthly means'
+    assert anom.dims == da.dims and anom['timestamp'].equals(da['timestamp']), 'output keeps the input dims and coordinate'
+
+    comps = analysis.remove_seasonal_and_trend(da, seasonal='climatology', trend=None, return_components=True)
+    assert isinstance(comps, xarray.Dataset) and set(comps.data_vars) == {'anomaly', 'climatology', 'trend'}
+    monthly = da.groupby('timestamp.month').mean()
+    assert numpy.allclose(comps['climatology'].data, monthly.sel(month=times.month).data), 'climatology component is the monthly mean at each time'
+    assert numpy.allclose(comps['trend'].data, 0), 'no trend requested -> trend component is identically zero'
+    assert numpy.allclose(comps['anomaly'].data, anom.data), 'anomaly component matches the plain return'
+
+
+def test_rsat_mean_only():
+    rng = numpy.random.default_rng(1)
+    times = _monthly_times(n=60)
+    da = _series(rng.normal(size=60) + 7, times)
+
+    comps = analysis.remove_seasonal_and_trend(da, seasonal=None, trend=None, return_components=True)
+    assert numpy.allclose(comps['climatology'].data, da.mean().item()), 'seasonal=None removes only the time mean'
+    assert numpy.allclose(comps['anomaly'].data, da.data - da.mean().item())
+    assert numpy.allclose(comps['trend'].data, 0)
+
+
+def test_rsat_harmonic_recovery():
+    times = _monthly_times(n=120)
+    t = _years(times)
+    da = _series(10 + _harmonics(t), times)
+
+    anom = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=2, trend=None)
+    assert numpy.allclose(anom.data, 0, atol=1e-8), 'annual + semiannual harmonics are recovered exactly'
+
+    # one harmonic only leaves the semiannual signal behind
+    anom1 = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=1, trend=None)
+    # (uneven month lengths make the two harmonics very slightly non-orthogonal on a monthly grid, hence the tolerance)
+    assert numpy.allclose(anom1.data, _harmonics(t, amps=((0, 0), (0.5, -0.25))), atol=0.01), 'the unmodelled semiannual harmonic is what remains'
+
+    # extra harmonics are harmless on a signal that doesn't contain them
+    anom3 = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=3, trend=None)
+    assert numpy.allclose(anom3.data, 0, atol=1e-8)
+
+    # the harmonic fit doesn't need regular sampling
+    rng = numpy.random.default_rng(2)
+    irregular = pandas.DatetimeIndex(sorted(pandas.Timestamp('2000-01-01') + pandas.to_timedelta(rng.integers(0, 365 * 8, size=150), unit='D')))
+    ti = _years(irregular)
+    da_irr = _series(3 + _harmonics(ti), irregular)
+    anom_irr = analysis.remove_seasonal_and_trend(da_irr, seasonal='harmonic', n_harmonics=2, trend=None)
+    assert numpy.allclose(anom_irr.data, 0, atol=1e-8), 'harmonics fit irregularly sampled records'
+
+
+def test_rsat_linear_trend_joint_fit():
+    # 30 months, Jan..Jun: a record that doesn't cover whole years, where fitting the
+    # climatology first and then the trend would bias both. The joint fit is exact.
+    times = _monthly_times(n=30)
+    t = _years(times)
+    monthly_cycle = numpy.array([3, 2, 1, 0, -1, -2, -3, -2, -1, 0, 1, 2], dtype=float)[times.month - 1]
+    da = _series(5 + 0.3 * t + monthly_cycle, times)
+
+    comps = analysis.remove_seasonal_and_trend(da, seasonal='climatology', trend='linear', return_components=True)
+    assert numpy.allclose(comps['anomaly'].data, 0, atol=1e-8), 'climatology + linear trend recovered jointly'
+    trend = comps['trend'].data
+    assert numpy.allclose(numpy.diff(trend) / numpy.diff(t), 0.3), 'trend component has the right slope in units per year'
+    # the trend is anchored at zero at the midpoint of the fit period, so the climatology carries the level there
+    t_mid = (times.min() + (times.max() - times.min()) / 2)
+    i_before, i_after = numpy.searchsorted(times, t_mid) - 1, numpy.searchsorted(times, t_mid)
+    assert trend[i_before] <= 0 <= trend[i_after], 'trend crosses zero at the centre of the fit period'
+    clim = comps['climatology'].data
+    assert numpy.allclose(clim[times.month == 1], clim[times.month == 1][0]), 'climatology is one value per calendar month'
+
+    # same signal, harmonic seasonal model: the step-like monthly cycle is not a pure 2-harmonic signal, so
+    # the anomaly is not zero, but the trend slope is still recovered to good accuracy
+    comps_h = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=2, trend='linear', return_components=True)
+    slope = numpy.polyfit(t, comps_h['trend'].data, 1)[0]
+    assert abs(slope - 0.3) < 0.05
+
+    # a record that is a whole number of years: sequential and joint estimates coincide
+    times = _monthly_times(n=120)
+    t = _years(times)
+    da = _series(5 + 0.3 * t + numpy.array([3, 2, 1, 0, -1, -2, -3, -2, -1, 0, 1, 2], dtype=float)[times.month - 1], times)
+    comps = analysis.remove_seasonal_and_trend(da, seasonal='climatology', trend='linear', return_components=True)
+    assert numpy.allclose(comps['anomaly'].data, 0, atol=1e-8)
+    assert numpy.allclose(numpy.polyfit(t, comps['trend'].data, 1)[0], 0.3)
+
+
+def test_rsat_quadratic_trend():
+    times = _monthly_times(n=240)
+    t = _years(times)
+    da = _series(1 + 0.1 * t + 0.05 * t ** 2 + _harmonics(t), times)
+
+    comps = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=2, trend='quadratic', return_components=True)
+    assert numpy.allclose(comps['anomaly'].data, 0, atol=1e-7), 'quadratic baseline + harmonics recovered'
+    # the trend component is a quadratic in time with the right curvature (the linear/constant parts
+    # depend on where the fit is centred, the curvature does not)
+    assert numpy.isclose(numpy.polyfit(t, comps['trend'].data, 2)[0], 0.05)
+    assert numpy.allclose(comps['anomaly'].data + comps['climatology'].data + comps['trend'].data, da.data), 'components sum to the input'
+
+    # a linear trend can't absorb the curvature
+    anom_lin = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=2, trend='linear')
+    assert numpy.abs(anom_lin.data).max() > 1, 'residual curvature is left in the anomaly'
+    assert numpy.isclose(numpy.polyfit(t, anom_lin.data, 2)[0], 0.05, atol=1e-6), 'and it is exactly the unmodelled quadratic term'
+
+    # climatology + quadratic also works
+    da_c = _series(1 + 0.1 * t + 0.05 * t ** 2 + numpy.arange(12, dtype=float)[times.month - 1], times)
+    anom_c = analysis.remove_seasonal_and_trend(da_c, seasonal='climatology', trend='quadratic')
+    assert numpy.allclose(anom_c.data, 0, atol=1e-7)
+
+
+def test_rsat_fit_period():
+    times = _monthly_times(n=240)  # 2000-2019
+    t = _years(times)
+    base = 2 + 0.1 * t + _harmonics(t)
+    # a 1-unit shift after 2010 that must survive as anomaly when the model is fit to 2000-2009 only
+    shift = numpy.where(times >= pandas.Timestamp('2010-01-01'), 1.0, 0.0)
+    da = _series(base + shift, times)
+
+    anom = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=2, trend='linear',
+                                              fit_period=('2000-01-01', '2009-12-31'))
+    first, second = times < pandas.Timestamp('2010-01-01'), times >= pandas.Timestamp('2010-01-01')
+    assert numpy.allclose(anom.data[first], 0, atol=1e-8), 'anomaly is zero inside the fit period'
+    assert numpy.allclose(anom.data[second], 1, atol=1e-8), 'the fitted model is extrapolated over the whole record'
+
+    # fitting on the full record instead smears the shift into the trend and the anomaly
+    anom_full = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=2, trend='linear')
+    assert not numpy.allclose(anom_full.data[second], 1, atol=0.1)
+
+    # fit_period bounds are inclusive on both ends
+    anom_a = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', fit_period=('2000-01-01', '2009-12-01'))
+    anom_b = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', fit_period=('2000-01-01', '2009-12-31'))
+    assert numpy.allclose(anom_a.data, anom_b.data), 'a timestamp exactly on the end bound is included'
+    anom_c = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', fit_period=('2000-01-01', '2009-11-30'))
+    assert not numpy.allclose(anom_a.data, anom_c.data), 'dropping 2009-12-01 changes the fit'
+
+    with pytest.raises(ValueError, match='no time steps inside fit_period'):
+        analysis.remove_seasonal_and_trend(da, fit_period=('1990-01-01', '1990-12-31'))
+
+    # an unsampled calendar month in the fit period can't be given a climatology: those times come back NaN
+    daily = pandas.date_range('2000-01-01', '2001-12-31', freq='D')
+    td = _years(daily)
+    da_d = _series(numpy.arange(12, dtype=float)[daily.month - 1] + 0.2 * td, daily)
+    anom_d = analysis.remove_seasonal_and_trend(da_d, seasonal='climatology', trend='linear',
+                                                fit_period=('2000-01-01', '2000-06-30'))
+    in_months = daily.month <= 6
+    assert numpy.allclose(anom_d.data[in_months], 0, atol=1e-8), 'Jan-Jun are fit from the first half of 2000 and extrapolated to 2001'
+    assert numpy.all(numpy.isnan(anom_d.data[~in_months])), 'Jul-Dec never appear in the fit period -> NaN'
+    # daily data get a step-function monthly climatology
+    comps_d = analysis.remove_seasonal_and_trend(da_d, seasonal='climatology', trend=None, return_components=True)
+    jan = comps_d['climatology'].data[daily.month == 1]
+    assert numpy.allclose(jan, jan[0]), 'one climatology value per calendar month even with daily sampling'
+
+
+def test_rsat_nan_handling():
+    times = _monthly_times(n=120)
+    t = _years(times)
+    signal = 4 + 0.2 * t + _harmonics(t)
+    field = numpy.tile(signal, (4, 1))  # (latitude, timestamp)
+    gaps = [5, 6, 40, 77]
+    field[1, gaps] = numpy.nan                 # a few gaps
+    field[2, :] = numpy.nan                    # nothing at all
+    field[3, 4:] = numpy.nan                   # 4 samples: fewer than the 6 model parameters
+    da = xarray.DataArray(field, dims=['latitude', 'timestamp'], coords={'latitude': [0, 1, 2, 3], 'timestamp': times})
+
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        comps = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=2, trend='linear', return_components=True)
+
+    assert comps['anomaly'].dims == ('latitude', 'timestamp'), 'dims order is preserved'
+    a = comps['anomaly'].data
+    assert numpy.allclose(a[0], 0, atol=1e-8), 'complete series'
+    ok = numpy.ones(120, dtype=bool); ok[gaps] = False
+    assert numpy.allclose(a[1, ok], 0, atol=1e-8), 'gappy series is fit on its valid samples'
+    assert numpy.all(numpy.isnan(a[1, gaps])), 'anomaly is NaN where the input is NaN'
+    assert numpy.allclose(comps['climatology'].data[1], comps['climatology'].data[0], atol=1e-8), 'gapped and complete fits agree on an exact signal'
+    assert numpy.allclose(comps['trend'].data[1], comps['trend'].data[0], atol=1e-8)
+    assert numpy.all(numpy.isnan(a[2])) and numpy.all(numpy.isnan(comps['climatology'].data[2])), 'all-NaN series stays NaN'
+    assert numpy.all(numpy.isnan(a[3])), 'too few samples to fit -> NaN rather than a garbage fit'
+
+    # gaps that fall outside the fit period don't demote a series to the per-point path, and the result is the same
+    field2 = numpy.tile(signal, (2, 1))
+    field2[1, 100:105] = numpy.nan
+    da2 = xarray.DataArray(field2, dims=['latitude', 'timestamp'], coords={'latitude': [0, 1], 'timestamp': times})
+    comps2 = analysis.remove_seasonal_and_trend(da2, seasonal='harmonic', trend='linear', fit_period=('2000-01-01', '2004-12-31'), return_components=True)
+    assert numpy.allclose(comps2['climatology'].data[0], comps2['climatology'].data[1])
+    assert numpy.all(numpy.isnan(comps2['anomaly'].data[1, 100:105])) and numpy.allclose(comps2['anomaly'].data[1, 105:], 0, atol=1e-8)
+
+    # climatology mode on a gappy series equals per-month means of the available samples
+    rng = numpy.random.default_rng(3)
+    y = rng.normal(size=120); y[[3, 15, 27]] = numpy.nan
+    da3 = _series(y, times)
+    anom3 = analysis.remove_seasonal_and_trend(da3, seasonal='climatology')
+    expected = da3.groupby('timestamp.month') - da3.groupby('timestamp.month').mean()
+    assert numpy.allclose(anom3.data, expected.data, equal_nan=True)
+
+
+def test_rsat_field_layout_and_smoothing():
+    times = _monthly_times(n=48)
+    t = _years(times)
+    rng = numpy.random.default_rng(4)
+    noise = rng.normal(size=(48, 2, 3))
+    field = (1 + _harmonics(t))[:, None, None] + noise
+    da = xarray.DataArray(field, dims=['timestamp', 'latitude', 'longitude'],
+                          coords={'timestamp': times, 'latitude': [10, 20], 'longitude': [100, 110, 120]})
+
+    # time-first layout: every grid point is fit separately and comes back in place
+    comps = analysis.remove_seasonal_and_trend(da, seasonal='harmonic', n_harmonics=2, return_components=True)
+    assert comps['anomaly'].dims == da.dims and comps['climatology'].dims == da.dims
+    for j in range(2):
+        for i in range(3):
+            single = analysis.remove_seasonal_and_trend(da.isel(latitude=j, longitude=i), seasonal='harmonic', n_harmonics=2)
+            assert numpy.allclose(comps['anomaly'].data[:, j, i], single.data), 'field fit equals per-series fit'
+    assert not numpy.allclose(comps['climatology'].data[:, 0, 0], comps['climatology'].data[:, 1, 2]), 'noise makes each grid point its own fit'
+
+    # a custom time dimension name
+    da_t = da.rename({'timestamp': 'time'})
+    anom_t = analysis.remove_seasonal_and_trend(da_t, time_dim='time', seasonal='harmonic', n_harmonics=2)
+    assert numpy.allclose(anom_t.data, comps['anomaly'].data)
+
+    # integer input is promoted to float
+    da_int = xarray.DataArray(numpy.arange(48), dims=['timestamp'], coords={'timestamp': times})
+    assert analysis.remove_seasonal_and_trend(da_int, seasonal=None, trend='linear').dtype.kind == 'f'
+
+    # smoothing is a centred rolling mean of the anomaly, with NaN at the ends
+    s = da.isel(latitude=0, longitude=0)
+    raw = analysis.remove_seasonal_and_trend(s, seasonal='harmonic', n_harmonics=2)
+    smooth = analysis.remove_seasonal_and_trend(s, seasonal='harmonic', n_harmonics=2, smooth_window=5)
+    expected = raw.rolling(timestamp=5, center=True).mean()
+    assert numpy.allclose(smooth.data, expected.data, equal_nan=True)
+    assert numpy.all(numpy.isnan(smooth.data[:2])) and numpy.all(numpy.isnan(smooth.data[-2:])), 'window edges are NaN'
+    assert numpy.allclose(smooth.data[2:-2], numpy.convolve(raw.data, numpy.ones(5) / 5, mode='valid'))
+    assert smooth.dims == s.dims
+
+
+def test_rsat_validation():
+    times = _monthly_times(n=24)
+    da = _series(numpy.arange(24, dtype=float), times)
+    with pytest.raises(ValueError, match="seasonal must be"):
+        analysis.remove_seasonal_and_trend(da, seasonal='monthly')
+    with pytest.raises(ValueError, match="trend must be"):
+        analysis.remove_seasonal_and_trend(da, trend='cubic')
+
+    # the sample count must exceed the number of fitted parameters; otherwise the result is silently NaN
+    short = _series(numpy.arange(12, dtype=float), _monthly_times(n=12))
+    assert numpy.all(numpy.isnan(analysis.remove_seasonal_and_trend(short, seasonal='climatology').data)), '12 samples, 12 monthly means: not enough'
+    thirteen = _series(numpy.arange(13, dtype=float), _monthly_times(n=13))
+    assert numpy.isfinite(analysis.remove_seasonal_and_trend(thirteen, seasonal='climatology').data).all(), '13 samples, 12 parameters: fits'
+    assert numpy.all(numpy.isnan(analysis.remove_seasonal_and_trend(thirteen, seasonal='climatology', trend='linear').data)), '13 samples, 13 parameters: not enough'
