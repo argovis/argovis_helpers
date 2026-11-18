@@ -184,6 +184,33 @@ def test_generate_global_cells(apiroot, apikey):
     assert len(helpers.generate_global_cells()) == 2592, 'global 5x5 grid generated wrong number of cells'
     assert helpers.generate_global_cells()[0] == [[-180,-90],[-175,-90],[-175,-85],[-180,-85],[-180,-90]], 'first cell of globabl 5x5 grid generated incorrectly'
 
+def test_split_polygon():
+    '''
+    a 10 degree x 10 degree square should split into four 5x5 squares
+    '''
+
+    square = [[0,0],[10,0],[10,10],[0,10],[0,0]]
+    pieces = helpers.split_polygon(square)
+
+    assert len(pieces) == 4, 'a 10x10 degree square should be split into four 5x5 pieces'
+    for piece in pieces:
+        assert len(piece) == 5, 'each piece should be a closed square: four corners, with the first repeated at the end'
+
+def test_split_polygon_multipolygon():
+    '''
+    an upside-down U shape: two legs hanging down from a bar across the top.
+    the bottom 5x5 box cuts through both legs but misses the bar,
+    so that one box contains two separate pieces (a MultiPolygon).
+    '''
+
+    upside_down_u = [[0,0],[1,0],[1,6],[3,6],[3,0],[4,0],[4,8],[0,8],[0,0]]
+    pieces = helpers.split_polygon(upside_down_u)
+
+    assert len(pieces) == 3, 'expected the two leg bottoms plus the top of the U'
+    assert [0.0, 0.0] in pieces[0], 'first piece should be the bottom of the left leg'
+    assert [3.0, 0.0] in pieces[1], 'second piece should be the bottom of the right leg'
+    assert [4.0, 8.0] in pieces[2], 'third piece should be the top of the U'
+
 def test_dont_wrap_dateline(apiroot, apikey):
     '''
     check basic behavior of dont_wrap_dateline

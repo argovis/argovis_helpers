@@ -12,9 +12,10 @@ license = "MIT"
 dependencies = [
     "requests",
     "area",
-    "shapely==1.8.0",
-    "geopandas",
+    "shapely>=2",
     "xarray",
+    "pandas",
+    "python-dateutil",
     "numpy",
     "scipy",
     "gsw"

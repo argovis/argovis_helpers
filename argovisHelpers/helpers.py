@@ -1,7 +1,6 @@
 from __future__ import annotations
-import requests, datetime, copy, time, re, area, math, urllib, json, xarray, numpy, scipy.interpolate, gsw
-from shapely.geometry import shape, box, Polygon
-from shapely.ops import orient
+import requests, datetime, copy, time, re, area, math, urllib, json, xarray, numpy, scipy.interpolate, gsw, shapely
+from shapely.geometry import shape, box
 from importlib.metadata import version, PackageNotFoundError
 from dataclasses import dataclass, field
 from typing import Any
@@ -186,11 +185,11 @@ def split_polygon(coords, max_lon_size=5, max_lat_size=5):
             # If the intersection is not empty, add it to the list of smaller polygons
             if not chunk.is_empty:
                 # Convert the Shapely geometry to a GeoJSON polygon and add it to the list
-                shapes = json.loads(gpd.GeoSeries([chunk]).to_json())
-                if shapes['features'][0]['geometry']['type'] == 'Polygon':
-                    smaller_polygons.append(shapes['features'][0]['geometry']['coordinates'][0])
-                elif shapes['features'][0]['geometry']['type'] == 'MultiPolygon':
-                    for poly in shapes['features'][0]['geometry']['coordinates']:
+                geojson = json.loads(shapely.to_geojson(chunk))
+                if geojson['type'] == 'Polygon':
+                    smaller_polygons.append(geojson['coordinates'][0])
+                elif geojson['type'] == 'MultiPolygon':
+                    for poly in geojson['coordinates']:
                         smaller_polygons.append(poly[0])
 
             lat += max_lat_size

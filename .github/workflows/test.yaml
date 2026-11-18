@@ -8,7 +8,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    container: argovis/argovis_helpers:test-base-261021
+    container: argovis/argovis_helpers:test-base-261118
 
     services:
       database:
@@ -16,9 +16,10 @@ jobs:
       redis:
         image: redis:7.0.2
       api:
-        image: argovis/api:2.43.0
+        image: argovis/api:2.44.0
         env:
           ARGONODE: core
+          MONGOCONNECT: mongodb://database:27017
 
     steps:
       - name: checkout
