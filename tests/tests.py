@@ -184,6 +184,93 @@ def test_generate_global_cells(apiroot, apikey):
     assert len(helpers.generate_global_cells()) == 2592, 'global 5x5 grid generated wrong number of cells'
     assert helpers.generate_global_cells()[0] == [[-180,-90],[-175,-90],[-175,-85],[-180,-85],[-180,-90]], 'first cell of globabl 5x5 grid generated incorrectly'
 
+def test_polygon_area():
+    '''
+    the northern hemisphere, drawn as a box from the equator to the pole,
+    should cover half the surface area of a sphere: 2 * pi * radius^2
+    '''
+
+    northern_hemisphere = [[-180,0],[180,0],[180,90],[-180,90],[-180,0]]
+    earth_radius = 6378137 # meters
+    half_a_sphere = 2 * numpy.pi * earth_radius**2
+
+    assert numpy.isclose(helpers.polygon_area(northern_hemisphere), half_a_sphere), 'northern hemisphere should be half the area of the globe'
+
+def test_slice_timesteps_box_matches_polygon():
+    '''
+    a box and the same region written out as a polygon cover the same area,
+    so they should get sliced into the same time steps
+    '''
+
+    dates = {'startDate': '2000-01-01T00:00:00Z', 'endDate': '2020-01-01T00:00:00Z'}
+    as_box = {'box': [[-60,10],[-20,50]]}
+    as_polygon = {'polygon': [[-60,10],[-20,10],[-20,50],[-60,50],[-60,10]]}
+
+    box_times = helpers.slice_timesteps({**dates, **as_box}, 'argo')
+    polygon_times = helpers.slice_timesteps({**dates, **as_polygon}, 'argo')
+
+    assert len(box_times) > 2, 'this region and time span should be big enough to need slicing'
+    assert box_times == polygon_times, 'a box and the equivalent polygon should be sliced identically'
+
+def test_slice_timesteps_dateline_box():
+    '''
+    a box that crosses the dateline can be written two ways:
+    wrapped, with the eastern edge at -170, or unwrapped, with it at 190.
+    these are the same 20 degree wide box, so they should get sliced into the same time steps
+    '''
+
+    dates = {'startDate': '2000-01-01T00:00:00Z', 'endDate': '2020-01-01T00:00:00Z'}
+    wrapped = {'box': [[170,-10],[-170,10]]}
+    unwrapped = {'box': [[170,-10],[190,10]]}
+
+    wrapped_times = helpers.slice_timesteps({**dates, **wrapped}, 'argo')
+    unwrapped_times = helpers.slice_timesteps({**dates, **unwrapped}, 'argo')
+
+    assert wrapped_times == unwrapped_times, 'a box crossing the dateline should be sliced the same whether or not its longitudes wrap'
+
+def test_slice_timesteps_dateline_polygon():
+    '''
+    same idea as the dateline box test, but for a polygon:
+    the same 20 degree wide square, written with its eastern edge at -170 (wrapped) or 190 (unwrapped),
+    should get sliced into the same time steps
+    '''
+
+    dates = {'startDate': '2000-01-01T00:00:00Z', 'endDate': '2020-01-01T00:00:00Z'}
+    wrapped = {'polygon': [[170,-10],[-170,-10],[-170,10],[170,10],[170,-10]]}
+    unwrapped = {'polygon': [[170,-10],[190,-10],[190,10],[170,10],[170,-10]]}
+
+    wrapped_times = helpers.slice_timesteps({**dates, **wrapped}, 'argo')
+    unwrapped_times = helpers.slice_timesteps({**dates, **unwrapped}, 'argo')
+
+    assert wrapped_times == unwrapped_times, 'a polygon crossing the dateline should be sliced the same whether or not its longitudes wrap'
+
+def test_split_polygon():
+    '''
+    a 10 degree x 10 degree square should split into four 5x5 squares
+    '''
+
+    square = [[0,0],[10,0],[10,10],[0,10],[0,0]]
+    pieces = helpers.split_polygon(square)
+
+    assert len(pieces) == 4, 'a 10x10 degree square should be split into four 5x5 pieces'
+    for piece in pieces:
+        assert len(piece) == 5, 'each piece should be a closed square: four corners, with the first repeated at the end'
+
+def test_split_polygon_multipolygon():
+    '''
+    an upside-down U shape: two legs hanging down from a bar across the top.
+    the bottom 5x5 box cuts through both legs but misses the bar,
+    so that one box contains two separate pieces (a MultiPolygon).
+    '''
+
+    upside_down_u = [[0,0],[1,0],[1,6],[3,6],[3,0],[4,0],[4,8],[0,8],[0,0]]
+    pieces = helpers.split_polygon(upside_down_u)
+
+    assert len(pieces) == 3, 'expected the two leg bottoms plus the top of the U'
+    assert [0.0, 0.0] in pieces[0], 'first piece should be the bottom of the left leg'
+    assert [3.0, 0.0] in pieces[1], 'second piece should be the bottom of the right leg'
+    assert [4.0, 8.0] in pieces[2], 'third piece should be the top of the U'
+
 def test_dont_wrap_dateline(apiroot, apikey):
     '''
     check basic behavior of dont_wrap_dateline

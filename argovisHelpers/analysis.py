@@ -711,8 +711,13 @@ def bin_profiles(
                     "alias ('MS', '3MS', 'YS')"
                 )
 
-            if isinstance(time_bin_offset, pandas.tseries.offsets.Tick):
-                # e.g. '30D', '12h': a fixed duration after all.
+            if isinstance(time_bin_offset, pandas.tseries.offsets.Day):
+                # e.g. '30D': a fixed number of days. This needs its own
+                # check because pandas 3 stopped counting Day as a Tick.
+                time_bin_delta = pandas.Timedelta(days=time_bin_offset.n)
+                time_bin_offset = None
+            elif isinstance(time_bin_offset, pandas.tseries.offsets.Tick):
+                # e.g. '12h': a fixed duration after all.
                 time_bin_delta = pandas.Timedelta(time_bin_offset)
                 time_bin_offset = None
         else:

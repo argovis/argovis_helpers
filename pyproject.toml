@@ -4,23 +4,23 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "argovisHelpers"
-version = "0.0.40"
+version = "0.0.41"
 description = "Helper functions to consume and parse information from University of Colorado's Argovis API."
 readme = "README.md"
 authors = [{name = "Katie Mills" }]
 license = "MIT"
 dependencies = [
     "requests",
-    "area",
-    "shapely==1.8.0",
-    "geopandas",
+    "shapely>=2",
     "xarray",
+    "pandas",
+    "python-dateutil",
     "numpy",
     "scipy",
     "gsw"
 
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 
 [project.urls]
 Homepage = "https://argovis.colorado.edu"
