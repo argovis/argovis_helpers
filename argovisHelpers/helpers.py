@@ -1,5 +1,5 @@
 from __future__ import annotations
-import requests, datetime, copy, time, re, area, math, urllib, json, xarray, numpy, scipy.interpolate, gsw, shapely
+import requests, datetime, copy, time, re, math, urllib, json, xarray, numpy, scipy.interpolate, gsw, shapely
 from shapely.geometry import shape, box
 from importlib.metadata import version, PackageNotFoundError
 from dataclasses import dataclass, field
@@ -62,6 +62,30 @@ def get_timebound(dataset, bound):
     return parsetime(rl[keymap[dataset]][bound])
 
 
+def polygon_area(coords):
+    # approximate area, in square meters, enclosed by a polygon drawn on the earth's surface.
+    # coords is a closed geojson-style ring: a list of [longitude, latitude] vertexes,
+    # with the first vertex repeated at the end.
+    # This is the same calculation the `area` package does; we used to depend on that package for it.
+
+    earth_radius = 6378137 # meters
+
+    n = len(coords)
+    if n < 3:
+        return 0
+
+    total = 0
+    for i in range(n):
+        # three consecutive vertexes; the % n wraps back around to the start of the list
+        previous_vertex = coords[i]
+        this_vertex = coords[(i+1) % n]
+        next_vertex = coords[(i+2) % n]
+
+        longitude_change = math.radians(next_vertex[0]) - math.radians(previous_vertex[0])
+        total += longitude_change * math.sin(math.radians(this_vertex[1]))
+
+    return abs(total * earth_radius * earth_radius / 2)
+
 def slice_timesteps(options, r):
     # given a qsr option dict and data route, return a list of reasonable time divisions
 
@@ -70,9 +94,20 @@ def slice_timesteps(options, r):
     extent = 360000000 / 13000 #// 360M sq km, all the oceans
     
     if 'polygon' in options:
-        extent = area.area({'type':'Polygon','coordinates':[ options['polygon'] ]}) / 13000 / 1000000 # poly area in units of 13000 sq. km. blocks
+        # if the polygon crosses the dateline with wrapped longitudes (like 170 to -170), unwrap them first (170 to 190);
+        # otherwise the area calculation thinks the polygon goes the long way around the globe.
+        polygon = dont_wrap_dateline(options['polygon'])
+        extent = polygon_area(polygon) / 13000 / 1000000 # poly area in units of 13000 sq. km. blocks
     elif 'box' in options:
-        extent = area.area({'type':'Polygon','coordinates':[[ options['box'][0], [options['box'][1][0], options['box'][0][0]], options['box'][1], [options['box'][0][0], options['box'][1][0]], options['box'][0]]]}) / 13000 / 1000000
+        # a box is [[lon_min, lat_min], [lon_max, lat_max]]; walk around its four corners
+        lon_min, lat_min = options['box'][0]
+        lon_max, lat_max = options['box'][1]
+        if lon_min > lon_max:
+            # the box crosses the dateline with wrapped longitudes (like 170 to -170); unwrap it (170 to 190),
+            # otherwise the area calculation thinks the box goes the long way around the globe.
+            lon_max += 360
+        box_corners = [[lon_min, lat_min], [lon_max, lat_min], [lon_max, lat_max], [lon_min, lat_max], [lon_min, lat_min]]
+        extent = polygon_area(box_corners) / 13000 / 1000000
         
     timestep = min(365*100,math.floor(maxbulk / extent))
 

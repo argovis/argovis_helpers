@@ -11,7 +11,6 @@ authors = [{name = "Katie Mills" }]
 license = "MIT"
 dependencies = [
     "requests",
-    "area",
     "shapely>=2",
     "xarray",
     "pandas",

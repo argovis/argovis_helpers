@@ -3,7 +3,7 @@
 # so tests here see the same stack a JupyterLite notebook will.
 FROM python:3.14
 
-RUN pip install pytest area gsw \
+RUN pip install pytest gsw \
     requests==2.33.1 \
     numpy==2.4.6 \
     scipy==1.18.0 \
